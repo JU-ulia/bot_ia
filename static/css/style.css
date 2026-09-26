@@ -1,0 +1,11 @@
+ /* Custom scrollbars & chart canvas responsiveness */
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f1f5f9;
+        }
+        .chart-container {
+            position: relative;
+            width: 100%;
+            height: 220px;
+        }
+  

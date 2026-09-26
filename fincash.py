@@ -1,1389 +1,686 @@
-# ==========================================
-# IMPORTS
-# ==========================================
-
-import telebot
+import os
+import json
+import psycopg2
 from groq import Groq
 from dotenv import load_dotenv
-
-import os
-import sqlite3
-import json
-import re
-
-from datetime import (
-    datetime,
-    timedelta
+from telegram import Update
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    filters,
+    ContextTypes,
 )
+from werkzeug.security import generate_password_hash, check_password_hash
 
-# ==========================================
-# LOAD ENV
-# ==========================================
+# NOVAS IMPORTAÇÕES PARA O FLASK E CONTROLE DE SESSÃO
+from flask import Flask, render_template, request, jsonify, session, redirect, url_for
+from flask_cors import CORS
+import threading
 
+# Carrega as variáveis de ambiente (.env)
 load_dotenv()
 
-TELEGRAM_TOKEN = os.getenv(
-    "TELEGRAM_TOKEN"
-)
-
-GROQ_API_KEY = os.getenv(
-    "GROQ_API_KEY"
-)
+# Inicializa a aplicação Flask
+app_web = Flask(__name__)
+app_web.secret_key = os.getenv("FLASK_SECRET_KEY", "fincash_secret_key_12345")
+CORS(app_web)
 
 # ==========================================
-# TELEGRAM + GROQ
+# CONEXÃO COM O BANCO DE DADOS
 # ==========================================
-
-bot = telebot.TeleBot(
-    TELEGRAM_TOKEN
-)
-
-client = Groq(
-    api_key=GROQ_API_KEY
-)
-
-# ==========================================
-# DATABASE
-# ==========================================
-
-conn = sqlite3.connect(
-    "fincash.db",
-    check_same_thread=False
-)
-
-cursor = conn.cursor()
+def obter_conexao():
+    """Cria e retorna uma nova conexão com o PostgreSQL."""
+    return psycopg2.connect(
+        host=os.getenv("DB_HOST"),
+        port=os.getenv("DB_PORT"),
+        database=os.getenv("DB_NAME"),
+        user=os.getenv("DB_USER"),
+        password=os.getenv("DB_PASSWORD"),
+    )
 
 # ==========================================
-# TABLES
+# TABLES (CRIAÇÃO E MIGRAÇÃO DAS TABELAS)
 # ==========================================
-
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS users (
-    telegram_id TEXT PRIMARY KEY,
-    nome TEXT
-)
-""")
-
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS transactions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    telegram_id TEXT,
-    tipo TEXT,
-    valor REAL,
-    categoria TEXT,
-    descricao TEXT,
-    data TEXT
-)
-""")
-
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS categories (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    telegram_id TEXT,
-    nome TEXT
-)
-""")
-
-conn.commit()
-
-# ==========================================
-# ESTADO TEMPORÁRIO
-# ==========================================
-
-usuarios_editando = {}
-
-# ==========================================
-# CATEGORIAS PADRÃO
-# ==========================================
-
-CATEGORIAS_PADRAO = [
-    "alimentacao",
-    "transporte",
-    "lazer",
-    "mercado",
-    "salario",
-    "saude",
-    "contas",
-    "moradia",
-    "outros"
-]
-
-# ==========================================
-# VALIDAR DATA
-# ==========================================
-
-def validar_data(data_texto):
+def criar_tabelas():
+    """Garante que as tabelas necessárias existam no banco de dados."""
+    conexao = obter_conexao()
+    cursor = conexao.cursor()
 
     try:
-
-        datetime.strptime(
-            data_texto,
-            "%d/%m/%Y"
-        )
-
-        return True
-
-    except:
-
-        return False
-
-# ==========================================
-# DATA SOLTA
-# ==========================================
-
-def parece_data_solta(texto):
-
-    regex = r"^\d{1,2}/\d{1,2}$"
-
-    return re.match(
-        regex,
-        texto.strip()
-    )
-
-# ==========================================
-# SEGURANÇA IA
-# ==========================================
-
-def verificar_seguranca(texto):
-
-    resposta = client.chat.completions.create(
-        model="llama-3.1-8b-instant",
-        temperature=0,
-        messages=[
-            {
-                "role": "system",
-                "content": """
-Você é o sistema de segurança do Fincash.
-
-Classifique SOMENTE como:
-
-- seguro
-- ofensivo
-- ilegal
-- dados_confidenciais
-- ameaca
-
-Retorne SOMENTE UMA palavra.
-"""
-            },
-            {
-                "role": "user",
-                "content": texto
-            }
-        ]
-    )
-
-    classificacao = (
-        resposta
-        .choices[0]
-        .message
-        .content
-        .strip()
-        .lower()
-    )
-
-    if classificacao == "ofensivo":
-
-        return """
-⚠️ Detectei uma mensagem ofensiva.
-
-O Fincash segue políticas
-de respeito e uso responsável.
-
-📩 SAC:
-jdfj@gmail.com
-"""
-
-    if classificacao == "ilegal":
-
-        return """
-⚠️ Solicitação bloqueada.
-
-O Fincash não auxilia
-atividades ilegais,
-fraudes ou invasões.
-
-📩 SAC:
-jdfj@gmail.com
-"""
-
-    if classificacao == "dados_confidenciais":
-
-        return """
-🔒 Não posso ajudar com
-dados confidenciais.
-
-O Fincash segue a LGPD
-(Lei Geral de Proteção de Dados).
-
-📩 SAC:
-jdfj@gmail.com
-"""
-
-    if classificacao == "ameaca":
-
-        return """
-⚠️ Detectei conteúdo inadequado.
-
-📩 SAC:
-jdfj@gmail.com
-"""
-
-    return None
-
-# ==========================================
-# CLASSIFICAR INTENÇÃO
-# ==========================================
-
-def classificar_intencao(texto):
-
-    resposta = client.chat.completions.create(
-        model="llama-3.1-8b-instant",
-        temperature=0,
-        messages=[
-            {
-                "role": "system",
-                "content": """
-Você classifica mensagens.
-
-Categorias:
-
-- movimentacao
-- consulta
-- conversa
-
-Retorne SOMENTE UMA palavra.
-
-movimentacao:
-compras,
-gastos,
-salário,
-receitas,
-despesas.
-
-consulta:
-saldo,
-gastos,
-categorias,
-movimentações.
-
-conversa:
-mensagens comuns.
-"""
-            },
-            {
-                "role": "user",
-                "content": texto
-            }
-        ]
-    )
-
-    return (
-        resposta
-        .choices[0]
-        .message
-        .content
-        .strip()
-        .lower()
-    )
-
-# ==========================================
-# EXTRAIR MOVIMENTAÇÃO
-# ==========================================
-
-def extrair_movimentacao(texto):
-
-    agora = datetime.now()
-
-    hoje = agora.strftime(
-        "%d/%m/%Y"
-    )
-
-    ontem = (
-        agora - timedelta(days=1)
-    ).strftime("%d/%m/%Y")
-
-    resposta = client.chat.completions.create(
-        model="llama-3.1-8b-instant",
-        temperature=0,
-        messages=[
-            {
-                "role": "system",
-                "content": f"""
-Você extrai movimentações financeiras.
-
-Retorne SOMENTE JSON válido.
-
-Formato:
-
-{{
-    "tipo": "",
-    "valor": 0.00,
-    "categoria": "",
-    "descricao": "",
-    "data": ""
-}}
-
-Regras:
-
-- tipo:
-receita ou despesa
-
-- valor:
-número decimal
-
-- categoria:
-minúsculo
-
-- hoje:
-{hoje}
-
-- ontem:
-{ontem}
-
-- se a data não existir:
-
-{{
-   "erro": "data_invalida"
-}}
-
-Exemplos:
-
-"mercado 50 hoje"
-"uber 20 ontem"
-"salário 3500"
-"""
-            },
-            {
-                "role": "user",
-                "content": texto
-            }
-        ]
-    )
-
-    return (
-        resposta
-        .choices[0]
-        .message
-        .content
-        .strip()
-    )
-
-# ==========================================
-# CONVERSA
-# ==========================================
-
-def responder_conversa(texto):
-
-    hoje = datetime.now().strftime(
-        "%d/%m/%Y"
-    )
-
-    resposta = client.chat.completions.create(
-        model="llama-3.1-8b-instant",
-        temperature=0.5,
-        messages=[
-            {
-                "role": "system",
-                "content": f"""
-Você é o Fincash.
-
-Hoje é:
-{hoje}
-
-Você é um assistente financeiro.
-
-Regras:
-
-- nunca invente saldo
-- nunca invente datas
-- nunca invente movimentações
-- seja breve
-- responda naturalmente
-"""
-            },
-            {
-                "role": "user",
-                "content": texto
-            }
-        ]
-    )
-
-    return (
-        resposta
-        .choices[0]
-        .message
-        .content
-        .strip()
-    )
-
-# ==========================================
-# SALDO
-# ==========================================
-
-def obter_saldo(telegram_id):
-
-    cursor.execute("""
-    SELECT SUM(valor)
-    FROM transactions
-    WHERE telegram_id = ?
-    AND tipo = 'receita'
-    """, (telegram_id,))
-
-    receitas = (
-        cursor.fetchone()[0]
-        or 0
-    )
-
-    cursor.execute("""
-    SELECT SUM(valor)
-    FROM transactions
-    WHERE telegram_id = ?
-    AND tipo = 'despesa'
-    """, (telegram_id,))
-
-    despesas = (
-        cursor.fetchone()[0]
-        or 0
-    )
-
-    saldo = receitas - despesas
-
-    return (
-        receitas,
-        despesas,
-        saldo
-    )
-
-# ==========================================
-# LISTAR MOVIMENTAÇÕES
-# ==========================================
-
-def listar_movimentacoes(
-    telegram_id
-):
-
-    cursor.execute("""
-    SELECT
-        id,
-        categoria,
-        valor,
-        data
-    FROM transactions
-    WHERE telegram_id = ?
-    ORDER BY id DESC
-    LIMIT 10
-    """, (telegram_id,))
-
-    resultados = cursor.fetchall()
-
-    if not resultados:
-
-        return """
-📭 Nenhuma movimentação encontrada.
-"""
-
-    resposta = (
-        "📄 Últimas movimentações:\n\n"
-    )
-
-    for item in resultados:
-
-        resposta += (
-            f"#{item[0]} | "
-            f"{item[1].title()} | "
-            f"R$ {item[2]:.2f} | "
-            f"{item[3]}\n"
-        )
-
-    resposta += """
-
-✏️ Para editar,
-envie:
-
-editar
-"""
-
-    return resposta
-
-# ==========================================
-# CONSULTAS
-# ==========================================
-
-def responder_consulta(
-    texto,
-    telegram_id
-):
-
-    texto_lower = texto.lower()
-
-    # listar
-
-    if (
-        "listar" in texto_lower
-        or "movimentações" in texto_lower
-    ):
-
-        return listar_movimentacoes(
-            telegram_id
-        )
-
-    # categorias
-
-    if "categoria" in texto_lower:
-
+        # 1. Tabela de Usuários (com campo data_cadastro)
         cursor.execute("""
-        SELECT nome
-        FROM categories
-        WHERE telegram_id = ?
-        """, (telegram_id,))
+        CREATE TABLE IF NOT EXISTS users (
+            telegram_id TEXT PRIMARY KEY,
+            nome TEXT,
+            senha TEXT,
+            email TEXT,
+            data_cadastro TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """)
 
-        categorias_usuario = [
-            c[0]
-            for c in cursor.fetchall()
-        ]
-
-        categorias = list(
-            set(
-                CATEGORIAS_PADRAO
-                + categorias_usuario
-            )
-        )
-
-        categorias.sort()
-
-        resposta = (
-            "📂 Categorias disponíveis:\n\n"
-        )
-
-        for categoria in categorias:
-
-            resposta += (
-                f"• {categoria.title()}\n"
-            )
-
-        return resposta
-
-    # saldo
-
-    if "saldo" in texto_lower:
-
-        receitas, despesas, saldo = (
-            obter_saldo(
-                telegram_id
-            )
-        )
-
-        return f"""
-💰 Seu saldo atual:
-
-💵 R$ {saldo:.2f}
-
-📈 Entradas:
-R$ {receitas:.2f}
-
-📉 Saídas:
-R$ {despesas:.2f}
-"""
-
-    # quanto gastou
-
-    if (
-        "quanto gastei"
-        in texto_lower
-        or "gastei"
-        in texto_lower
-    ):
-
+        # Garantia de Migração: Se a tabela 'users' já existia antes sem a coluna 'data_cadastro'
         cursor.execute("""
-        SELECT SUM(valor)
-        FROM transactions
-        WHERE telegram_id = ?
-        AND tipo = 'despesa'
-        """, (telegram_id,))
+            ALTER TABLE users 
+            ADD COLUMN IF NOT EXISTS data_cadastro TIMESTAMP DEFAULT CURRENT_TIMESTAMP;
+        """)
 
-        total = (
-            cursor.fetchone()[0]
-            or 0
-        )
-
-        return f"""
-📉 Você já gastou:
-
-R$ {total:.2f}
-"""
-
-    return responder_conversa(
-        texto
-    )
-
-# ==========================================
-# START
-# ==========================================
-
-@bot.message_handler(
-    commands=['start']
-)
-def start(message):
-
-    telegram_id = str(
-        message.from_user.id
-    )
-
-    nome = (
-        message.from_user.first_name
-    )
-
-    cursor.execute("""
-    SELECT *
-    FROM users
-    WHERE telegram_id = ?
-    """, (telegram_id,))
-
-    usuario = cursor.fetchone()
-
-    if not usuario:
-
+        # 2. Tabela de Transações (Lançamentos Financeiros)
         cursor.execute("""
-        INSERT INTO users (
-            telegram_id,
-            nome
-        )
-        VALUES (?, ?)
-        """, (
-            telegram_id,
-            nome
-        ))
-
-        conn.commit()
-
-        texto = f"""
-Olá {nome}! 👋
-
-Eu sou o Fincash 💰
-
-Exemplos:
-
-• mercado 150 hoje
-• uber 30 ontem
-• salário 3500
-• quanto gastei?
-• qual meu saldo?
-• listar movimentações
-"""
-
-    else:
-
-        texto = f"""
-Bem-vindo de volta,
-{nome}! 🚀
-"""
-
-    bot.reply_to(
-        message,
-        texto
-    )
-
-# ==========================================
-# MENSAGENS
-# ==========================================
-
-@bot.message_handler(
-    func=lambda message: True
-)
-def mensagens(message):
-
-    try:
-
-        texto_usuario = (
-            message.text.strip()
-        )
-
-        telegram_id = str(
-            message.from_user.id
-        )
-
-        # ==========================================
-        # DATA SOLTA
-        # ==========================================
-
-        if parece_data_solta(
-            texto_usuario
-        ):
-
-            bot.reply_to(
-                message,
-                """
-⚠️ Você enviou apenas uma data.
-
-Exemplo correto:
-
-mercado 50 05/03/2025
-"""
-            )
-
-            return
-
-        # ==========================================
-        # SEGURANÇA
-        # ==========================================
-
-        seguranca = (
-            verificar_seguranca(
-                texto_usuario
-            )
-        )
-
-        if seguranca:
-
-            bot.reply_to(
-                message,
-                seguranca
-            )
-
-            return
-
-        # ==========================================
-        # INICIAR EDIÇÃO
-        # ==========================================
-
-        if (
-            texto_usuario.lower().strip()
-            == "editar"
-        ):
-
-            usuarios_editando[
-                telegram_id
-            ] = {
-                "etapa": "aguardando_id"
-            }
-
-            bot.reply_to(
-                message,
-                """
-✏️ Qual o ID (#)
-da movimentação?
-
-Exemplo:
-
-#5
-"""
-            )
-
-            return
-
-        # ==========================================
-        # FLUXO EDIÇÃO
-        # ==========================================
-
-        if telegram_id in usuarios_editando:
-
-            estado = usuarios_editando[
-                telegram_id
-            ]
-
-            etapa = estado["etapa"]
-
-            # ==========================================
-            # AGUARDANDO ID
-            # ==========================================
-
-            if etapa == "aguardando_id":
-
-                match = re.search(
-                    r"\#?(\d+)",
-                    texto_usuario
-                )
-
-                if not match:
-
-                    bot.reply_to(
-                        message,
-                        """
-⚠️ Envie um ID válido.
-
-Exemplo:
-
-#5
-
-📩 SAC:
-jdfj@gmail.com
-"""
-                    )
-
-                    return
-
-                transaction_id = (
-                    match.group(1)
-                )
-
-                cursor.execute("""
-                SELECT
-                    id,
-                    categoria,
-                    data
-                FROM transactions
-                WHERE id = ?
-                AND telegram_id = ?
-                """, (
-                    transaction_id,
-                    telegram_id
-                ))
-
-                transacao = (
-                    cursor.fetchone()
-                )
-
-                # ID inexistente
-
-                if not transacao:
-
-                    bot.reply_to(
-                        message,
-                        """
-❌ Movimentação não encontrada.
-
-📩 SAC:
-jdfj@gmail.com
-"""
-                    )
-
-                    return
-
-                categoria = (
-                    transacao[1]
-                )
-
-                data_movimentacao = (
-                    transacao[2]
-                )
-
-                # bloquear salário
-
-                if (
-                    categoria.lower()
-                    == "salario"
-                ):
-
-                    bot.reply_to(
-                        message,
-                        """
-🔒 Não é possível editar
-movimentações salariais.
-
-📩 SAC:
-jdfj@gmail.com
-"""
-                    )
-
-                    return
-
-                # bloquear antigas
-
-                data_obj = datetime.strptime(
-                    data_movimentacao,
-                    "%d/%m/%Y"
-                )
-
-                dias_passados = (
-                    datetime.now()
-                    - data_obj
-                ).days
-
-                if dias_passados > 90:
-
-                    bot.reply_to(
-                        message,
-                        """
-🔒 Movimentações com mais
-de 90 dias não podem
-ser editadas.
-
-📩 SAC:
-jdfj@gmail.com
-"""
-                    )
-
-                    return
-
-                estado["id"] = (
-                    transaction_id
-                )
-
-                estado["etapa"] = (
-                    "aguardando_campo"
-                )
-
-                bot.reply_to(
-                    message,
-                    f"""
-✏️ O que deseja editar
-na movimentação #{transaction_id}?
-
-• valor
-• categoria
-• data
-"""
-                )
-
-                return
-
-            # ==========================================
-            # AGUARDANDO CAMPO
-            # ==========================================
-
-            if etapa == "aguardando_campo":
-
-                campo = (
-                    texto_usuario
-                    .lower()
-                    .strip()
-                )
-
-                campos_validos = [
-                    "valor",
-                    "categoria",
-                    "data"
-                ]
-
-                if (
-                    campo
-                    not in campos_validos
-                ):
-
-                    bot.reply_to(
-                        message,
-                        """
-⚠️ Campo inválido.
-
-Use:
-
-• valor
-• categoria
-• data
-"""
-                    )
-
-                    return
-
-                estado["campo"] = campo
-
-                estado["etapa"] = (
-                    "aguardando_valor"
-                )
-
-                if campo == "valor":
-
-                    bot.reply_to(
-                        message,
-                        """
-💰 Qual o novo valor?
-"""
-                    )
-
-                    return
-
-                if campo == "categoria":
-
-                    bot.reply_to(
-                        message,
-                        """
-📂 Qual a nova categoria?
-"""
-                    )
-
-                    return
-
-                if campo == "data":
-
-                    bot.reply_to(
-                        message,
-                        """
-📅 Qual a nova data?
-
-Formato:
-
-DD/MM/YYYY
-"""
-                    )
-
-                    return
-
-            # ==========================================
-            # AGUARDANDO VALOR
-            # ==========================================
-
-            if etapa == "aguardando_valor":
-
-                campo = estado["campo"]
-
-                transaction_id = (
-                    estado["id"]
-                )
-
-                novo_valor = (
-                    texto_usuario.strip()
-                )
-
-                # validar valor
-
-                if campo == "valor":
-
-                    try:
-
-                        novo_valor = float(
-                            novo_valor
-                        )
-
-                    except:
-
-                        bot.reply_to(
-                            message,
-                            """
-⚠️ Valor inválido.
-"""
-                        )
-
-                        return
-
-                # validar data
-
-                if campo == "data":
-
-                    if not validar_data(
-                        novo_valor
-                    ):
-
-                        bot.reply_to(
-                            message,
-                            """
-⚠️ Data inválida.
-
-Use:
-
-DD/MM/YYYY
-"""
-                        )
-
-                        return
-
-                # salvar categoria
-
-                if campo == "categoria":
-
-                    novo_valor = (
-                        novo_valor
-                        .lower()
-                        .strip()
-                    )
-
-                    if (
-                        novo_valor
-                        not in CATEGORIAS_PADRAO
-                    ):
-
-                        cursor.execute("""
-                        SELECT *
-                        FROM categories
-                        WHERE telegram_id = ?
-                        AND nome = ?
-                        """, (
-                            telegram_id,
-                            novo_valor
-                        ))
-
-                        existe = (
-                            cursor.fetchone()
-                        )
-
-                        if not existe:
-
-                            cursor.execute("""
-                            INSERT INTO categories (
-                                telegram_id,
-                                nome
-                            )
-                            VALUES (?, ?)
-                            """, (
-                                telegram_id,
-                                novo_valor
-                            ))
-
-                # atualizar
-
-                cursor.execute(f"""
-                UPDATE transactions
-                SET {campo} = ?
-                WHERE id = ?
-                """, (
-                    novo_valor,
-                    transaction_id
-                ))
-
-                conn.commit()
-
-                del usuarios_editando[
-                    telegram_id
-                ]
-
-                receitas, despesas, saldo = (
-                    obter_saldo(
-                        telegram_id
-                    )
-                )
-
-                bot.reply_to(
-                    message,
-                    f"""
-✅ Movimentação #{transaction_id}
-atualizada com sucesso.
-
-📊 Resumo atualizado:
-
-📈 Entradas:
-R$ {receitas:.2f}
-
-📉 Saídas:
-R$ {despesas:.2f}
-
-💵 Saldo:
-R$ {saldo:.2f}
-"""
-                )
-
-                return
-
-        # ==========================================
-        # CLASSIFICAR
-        # ==========================================
-
-        intencao = (
-            classificar_intencao(
-                texto_usuario
-            )
-        )
-
-        # ==========================================
-        # MOVIMENTAÇÃO
-        # ==========================================
-
-        if intencao == "movimentacao":
-
-            resposta_json = (
-                extrair_movimentacao(
-                    texto_usuario
-                )
-            )
-
-            dados = json.loads(
-                resposta_json
-            )
-
-            if (
-                "erro" in dados
-            ):
-
-                bot.reply_to(
-                    message,
-                    """
-⚠️ Data inválida.
-
-Use datas reais.
-
-📩 SAC:
-jdfj@gmail.com
-"""
-                )
-
-                return
-
-            tipo = dados["tipo"]
-
-            valor = float(
-                dados["valor"]
-            )
-
-            categoria = (
-                dados["categoria"]
-            )
-
-            descricao = (
-                dados["descricao"]
-            )
-
-            data = dados["data"]
-
-            if not validar_data(
-                data
-            ):
-
-                bot.reply_to(
-                    message,
-                    """
-⚠️ Data inválida.
-
-📩 SAC:
-jdfj@gmail.com
-"""
-                )
-
-                return
-
-            # salvar categoria
-
-            if (
-                categoria
-                not in CATEGORIAS_PADRAO
-            ):
-
-                cursor.execute("""
-                SELECT *
-                FROM categories
-                WHERE telegram_id = ?
-                AND nome = ?
-                """, (
-                    telegram_id,
-                    categoria
-                ))
-
-                existe = (
-                    cursor.fetchone()
-                )
-
-                if not existe:
-
-                    cursor.execute("""
-                    INSERT INTO categories (
-                        telegram_id,
-                        nome
-                    )
-                    VALUES (?, ?)
-                    """, (
-                        telegram_id,
-                        categoria
-                    ))
-
-            # salvar movimentação
-
-            cursor.execute("""
-            INSERT INTO transactions (
-                telegram_id,
-                tipo,
-                valor,
-                categoria,
-                descricao,
-                data
-            )
-            VALUES (?, ?, ?, ?, ?, ?)
-            """, (
-                telegram_id,
-                tipo,
-                valor,
-                categoria,
-                descricao,
-                data
-            ))
-
-            conn.commit()
-
-            transaction_id = (
-                cursor.lastrowid
-            )
-
-            receitas, despesas, saldo = (
-                obter_saldo(
-                    telegram_id
-                )
-            )
-
-            bot.reply_to(
-                message,
-                f"""
-✅ Movimentação registrada! #{transaction_id}
-
-📂 Categoria:
-{categoria.title()}
-
-💰 Valor:
-R$ {valor:.2f}
-
-📅 Data:
-{data}
-
-📊 Resumo atual:
-
-📈 Entradas:
-R$ {receitas:.2f}
-
-📉 Saídas:
-R$ {despesas:.2f}
-
-💵 Saldo:
-R$ {saldo:.2f}
-"""
-            )
-
-            return
-
-        # ==========================================
-        # CONSULTA
-        # ==========================================
-
-        if intencao == "consulta":
-
-            resposta = (
-                responder_consulta(
-                    texto_usuario,
-                    telegram_id
-                )
-            )
-
-            bot.reply_to(
-                message,
-                resposta
-            )
-
-            return
-
-        # ==========================================
-        # CONVERSA
-        # ==========================================
-
-        resposta = (
-            responder_conversa(
-                texto_usuario
-            )
-        )
-
-        bot.reply_to(
-            message,
-            resposta
-        )
+        CREATE TABLE IF NOT EXISTS transactions (
+            id SERIAL PRIMARY KEY,
+            telegram_id TEXT REFERENCES users(telegram_id),
+            tipo VARCHAR(10) NOT NULL,
+            valor NUMERIC(10, 2) NOT NULL,
+            categoria VARCHAR(50),
+            descricao TEXT,
+            data DATE DEFAULT CURRENT_DATE
+        );
+        """)
+
+        # Garantia de Migração: Se a tabela 'transactions' já existia antes sem a coluna 'data'
+        cursor.execute("""
+            ALTER TABLE transactions 
+            ADD COLUMN IF NOT EXISTS data DATE DEFAULT CURRENT_DATE;
+        """)
+
+        # 3. Tabela de Categorias
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS categories (
+            id SERIAL PRIMARY KEY,
+            telegram_id TEXT REFERENCES users(telegram_id),
+            nome TEXT NOT NULL
+        );
+        """)
+
+        conexao.commit()
+        print("Tabelas 'users', 'transactions' e 'categories' sincronizadas com sucesso!")
 
     except Exception as e:
+        print(f"Erro ao criar/atualizar tabelas: {e}")
+        conexao.rollback()
 
-        print(
-            "ERRO:",
-            e
-        )
+    finally:
+        cursor.close()
+        conexao.close()
 
-        bot.reply_to(
-            message,
-            """
-⚠️ Não consegui processar
-sua solicitação.
 
-📩 SAC:
-jdfj@gmail.com
-"""
-        )
+# Executa a criação das tabelas ao iniciar a aplicação
+criar_tabelas()
+
+def deletar_transacao_por_id(telegram_id: str, id_transacao: int) -> bool:
+    """Deleta um lançamento do usuário pelo ID e retorna True se foi encontrado."""
+    with obter_conexao() as conexao:
+        with conexao.cursor() as cursor:
+            cursor.execute("""
+                DELETE FROM transactions 
+                WHERE id = %s AND telegram_id = %s;
+            """, (id_transacao, telegram_id))
+            deletados = cursor.rowcount
+            conexao.commit()
+            return deletados > 0
+        
+# ==========================================
+# ROTAS DA API E INTERFACE WEB (FLASK)
+# ==========================================
+
+# 1. Rota Principal / Dashboard
+@app_web.route('/')
+def index():
+    if 'telegram_id' not in session:
+        return redirect(url_for('login_page'))
+    return render_template('main.html')
+
+# 1. Rota Login
+@app_web.route('/login')
+def login_page():
+    if 'telegram_id' in session:
+        return redirect(url_for('index'))
+    return render_template('login.html')
+
+# 2. Rota da Tela de Login / Cadastro
+@app_web.route('/api/login', methods=['POST'])
+def handle_login():
+    dados = request.get_json() or {}
+    identifier = str(dados.get('identifier', '')).strip()
+    password = str(dados.get('password', '')).strip()
+
+    if not identifier or not password:
+        return jsonify({"erro": "Informe seu Telegram ID ou E-mail e sua senha."}), 400
+
+    conexao = obter_conexao()
+    cursor = conexao.cursor()
+
+    # Procura o utilizador no banco
+    cursor.execute("""
+        SELECT telegram_id, nome, senha 
+        FROM users 
+        WHERE telegram_id = %s OR email = %s;
+    """, (identifier, identifier))
+    user = cursor.fetchone()
+
+    cursor.close()
+    conexao.close()
+
+    if user:
+        db_telegram_id, db_nome, db_senha_hash = user
+
+        # -------------------------------------------------------------
+        # 🔒 PASSO PRINCIPAL: Validar a senha com check_password_hash
+        # -------------------------------------------------------------
+        if db_senha_hash and check_password_hash(db_senha_hash, password):
+            session['telegram_id'] = db_telegram_id
+            session['user_name'] = db_nome
+            return jsonify({"sucesso": True, "mensagem": "Login efetuado!"})
+        else:
+            return jsonify({"erro": "Senha incorreta."}), 401
+    else:
+        return jsonify({"erro": "Usuário não encontrado."}), 404
+    
+@app_web.route('/api/cadastrar', methods=['POST'])
+def handle_register():
+    dados = request.get_json() or {}
+    nome = str(dados.get('name', '')).strip()
+    telegram_id = str(dados.get('telegram_id', '')).strip()
+    password = str(dados.get('password', '')).strip()
+
+    if not nome or not telegram_id or not password:
+        return jsonify({"erro": "Todos os campos são obrigatórios."}), 400
+
+    conexao = obter_conexao()
+    cursor = conexao.cursor()
+
+    # Verificar se o utilizador já existe
+    cursor.execute("SELECT telegram_id FROM users WHERE telegram_id = %s;", (telegram_id,))
+    if cursor.fetchone():
+        cursor.close()
+        conexao.close()
+        return jsonify({"erro": "Este Telegram ID já está cadastrado."}), 400
+
+    # -------------------------------------------------------------
+    # 🔒 PASSO PRINCIPAL: Gerar o Hash da Senha antes de salvar
+    # -------------------------------------------------------------
+    senha_hash = generate_password_hash(password)
+
+    # Guarda 'senha_hash' em vez da senha em texto puro
+    cursor.execute("""
+        INSERT INTO users (telegram_id, nome, senha)
+        VALUES (%s, %s, %s);
+    """, (telegram_id, nome, senha_hash))
+
+    conexao.commit()
+    cursor.close()
+    conexao.close()
+
+    return jsonify({"sucesso": True, "mensagem": "Conta criada com sucesso!"})
+
+# 5. Rota de Logout (Sair)
+@app_web.route('/logout')
+def logout():
+    session.clear()
+    return redirect(url_for('login_page'))
+
+# 6. API: Retorna dados do usuário autenticado na sessão atual
+@app_web.route('/api/usuario-atual', methods=['GET'])
+def obter_usuario_atual():
+    if 'telegram_id' not in session:
+        return jsonify({"erro": "Não autenticado"}), 401
+    return jsonify({
+        "telegram_id": session['telegram_id'],
+        "nome": session.get('user_name', 'Usuário')
+    })
+
+# 7. API: Retorna a data de cadastro do usuário logado
+@app_web.route('/api/usuario-data-cadastro', methods=['GET'])
+def obter_data_cadastro():
+    if 'telegram_id' not in session:
+        return jsonify({"erro": "Não autenticado"}), 401
+    
+    telegram_id = session['telegram_id']
+    conexao = obter_conexao()
+    cursor = conexao.cursor()
+
+    cursor.execute("""
+        SELECT TO_CHAR(COALESCE(data_cadastro, CURRENT_TIMESTAMP), 'YYYY-MM-DD') 
+        FROM users 
+        WHERE telegram_id = %s;
+    """, (telegram_id,))
+    
+    row = cursor.fetchone()
+    cursor.close()
+    conexao.close()
+
+    data_cadastro = row[0] if row else None
+    return jsonify({"data_cadastro": data_cadastro})
+
+# 8. API: Retorna as datas que possuem lançamentos cadastrados no banco
+@app_web.route('/api/datas-com-transacoes', methods=['GET'])
+def datas_com_transacoes():
+    if 'telegram_id' not in session:
+        return jsonify([]), 401
+    
+    telegram_id = session['telegram_id']
+    conexao = obter_conexao()
+    cursor = conexao.cursor()
+
+    cursor.execute("""
+        SELECT DISTINCT TO_CHAR(data, 'YYYY-MM-DD') 
+        FROM transactions 
+        WHERE telegram_id = %s AND data IS NOT NULL;
+    """, (telegram_id,))
+    
+    datas = [row[0] for row in cursor.fetchall()]
+
+    cursor.close()
+    conexao.close()
+
+    return jsonify(datas)
+
+
+# 9. API: Consulta e envia os dados do Dashboard (com filtro por Mês/Ano ?mes=YYYY-MM)
+@app_web.route('/api/dados-dashboard/<telegram_id>', methods=['GET'])
+def obter_dados_dashboard(telegram_id):
+    try:
+        if 'telegram_id' in session:
+            telegram_id = str(session['telegram_id']).strip()
+
+        mes_filtro = request.args.get('mes', None)
+
+        conexao = obter_conexao()
+        cursor = conexao.cursor()
+
+        if mes_filtro:
+            condicao_data = "AND TO_CHAR(data, 'YYYY-MM') = %s"
+            params_base = (telegram_id, mes_filtro)
+        else:
+            condicao_data = ""
+            params_base = (telegram_id,)
+
+        # 1. Total Renda e Despesa
+        query_totais = f"""
+            SELECT 
+                COALESCE(SUM(CASE WHEN tipo = 'renda' THEN valor ELSE 0 END), 0) AS total_renda,
+                COALESCE(SUM(CASE WHEN tipo = 'despesa' THEN valor ELSE 0 END), 0) AS total_despesas
+            FROM transactions 
+            WHERE telegram_id = %s {condicao_data};
+        """
+        cursor.execute(query_totais, params_base)
+        row_totais = cursor.fetchone()
+        total_renda = float(row_totais[0]) if row_totais else 0.0
+        total_despesas = float(row_totais[1]) if row_totais else 0.0
+        saldo = total_renda - total_despesas
+
+        # 2. Total Poupança / Investimentos
+        cursor.execute("""
+            SELECT COALESCE(SUM(valor), 0)
+            FROM transactions
+            WHERE telegram_id = %s AND (categoria ILIKE 'Poupança' OR categoria ILIKE 'Investimentos');
+        """, (telegram_id,))
+        poupanca_row = cursor.fetchone()
+        total_poupanca = float(poupanca_row[0]) if poupanca_row else 0.0
+
+        # 3. Gastos por Categoria
+        query_categorias = f"""
+            SELECT categoria, SUM(valor) 
+            FROM transactions 
+            WHERE telegram_id = %s AND tipo = 'despesa' {condicao_data}
+            GROUP BY categoria;
+        """
+        cursor.execute(query_categorias, params_base)
+        categorias_rows = cursor.fetchall()
+        categorias = [row[0] for row in categorias_rows]
+        valores_categorias = [float(row[1]) for row in categorias_rows]
+
+        # 4. Nome do Usuário
+        cursor.execute("SELECT nome FROM users WHERE telegram_id = %s;", (telegram_id,))
+        user_row = cursor.fetchone()
+        nome_usuario = user_row[0] if user_row else "Usuário"
+
+        # 5. BUSCA A DATA DO ÚLTIMO REGISTRO NO MÊS SELECIONADO (FORMATADA)
+        query_ultima_atividade = f"""
+            SELECT TO_CHAR(MAX(data), 'DD/MM/YYYY HH24:MI') 
+            FROM transactions 
+            WHERE telegram_id = %s {condicao_data};
+        """
+        cursor.execute(query_ultima_atividade, params_base)
+        last_row = cursor.fetchone()
+        ultima_atividade = last_row[0] if last_row and last_row[0] else None
+
+        cursor.close()
+        conexao.close()
+
+        return jsonify({
+            "usuario": nome_usuario,
+            "totais": {
+                "renda": total_renda,
+                "despesa": total_despesas,
+                "saldo": saldo,
+                "poupanca": total_poupanca
+            },
+            "categorias": {
+                "labels": categorias,
+                "valores": valores_categorias
+            },
+            "chatbot": {
+                "ultima_atividade": ultima_atividade
+            }
+        })
+
+    except Exception as e:
+        print(f"Erro interno no servidor (dados-dashboard): {e}")
+        return jsonify({"erro": str(e)}), 500
+            
+def rodar_flask():
+    """Roda o servidor web na porta 5000"""
+    app_web.run(host='0.0.0.0', port=5000, debug=False, use_reloader=False)
+
+# Inicializa o cliente da Groq
+cliente_groq = Groq(api_key=os.getenv("GROQ_API_KEY"))
+
 
 # ==========================================
-# START BOT
+# LÓGICA DE NEGÓCIO E INTEGRAÇÃO GROQ
 # ==========================================
+def garantir_usuario_existe(telegram_id: str, nome: str):
+    """Insere ou atualiza o usuário no banco de dados sem apagar credenciais."""
+    conexao = obter_conexao()
+    cursor = conexao.cursor()
 
-print(
-    "🚀 Fincash iniciado..."
-)
+    cursor.execute("""
+        INSERT INTO users (telegram_id, nome)
+        VALUES (%s, %s)
+        ON CONFLICT (telegram_id) DO UPDATE SET nome = EXCLUDED.nome;
+    """, (telegram_id, nome))
 
-bot.infinity_polling()
+    conexao.commit()
+    cursor.close()
+    conexao.close()
+
+
+def interpretar_mensagem_financeira(texto_usuario: str) -> dict:
+    """Envia o texto para a Groq (Llama 3) e retorna um dicionário JSON estruturado."""
+    prompt = f"""
+    Você é um assistente financeiro especialista em extrair lançamentos de texto livre, mesmo com erros de digitação ou gírias.
+    
+    Analise o texto a seguir: "{texto_usuario}"
+
+    CATEGORIAS DE DESPESA:
+    - Alimentação: Comida, almoço, aumoço, jantar, restaurante, lanche, mercado, iFood.
+    - Carro: Combustível, gasolina, mecânico, IPVA, seguro, estacionamento.
+    - Internet: Celular, internet residencial, TV.
+    - Moradia: Aluguel, luz, água, gás, condomínio.
+    - Lazer: Cinema, viagem, passeio, jogos.
+    - Outros: Gastos diversos.
+
+    CATEGORIAS DE RENDA:
+    - Salário: Salário, pagamento, holerite.
+    - Freelance: Bico, serviço, extra.
+    - Investimentos: Dividendos, rendimentos.
+    - Outras Rendas: Recebi, PIX recebido, presente, reembolso.
+
+    Retorne APENAS o JSON com a estrutura:
+    {{
+        "descricao": "Nome legível do item",
+        "valor": 0.00,
+        "categoria": "Nome da Categoria",
+        "tipo": "despesa" ou "renda"
+    }}
+    """
+
+    resposta = cliente_groq.chat.completions.create(
+        model="openai/gpt-oss-120b",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.1,
+        response_format={"type": "json_object"}
+    )
+
+    conteudo = resposta.choices[0].message.content.strip()
+    return json.loads(conteudo)
+
+
+def salvar_transacao(telegram_id: str, dados: dict) -> int:
+    """Salva a transação financeira na tabela 'transactions' e retorna o ID inserido."""
+    query = """
+        INSERT INTO transactions (telegram_id, tipo, valor, categoria, descricao)
+        VALUES (%s, %s, %s, %s, %s)
+        RETURNING id;
+    """
+    
+    with obter_conexao() as conexao:
+        with conexao.cursor() as cursor:
+            cursor.execute(query, (
+                str(telegram_id),
+                dados["tipo"],
+                dados["valor"],
+                dados["categoria"],
+                dados["descricao"]
+            ))
+            novo_id = cursor.fetchone()[0]
+            conexao.commit()
+            return novo_id
+        
+# ==========================================
+# HANDLERS DO BOT DO TELEGRAM
+# ==========================================
+async def responder_consultoria(texto_usuario: str) -> str:
+    texto_limpo = texto_usuario.strip().lower()
+
+    saudacoes = ["olá", "ola", "oi", "oii", "oiii", "bom dia", "boa tarde", "boa noite", "tudo bem", "tudo bem?"]
+    if texto_limpo in saudacoes:
+        return (
+            "Olá! 👋 Sou o **Fincash**, o seu assistente financeiro pessoal.\n\n"
+            "Estou aqui para te ajudar a registrar gastos, organizar as suas contas e dar dicas de economia.\n\n"
+            "Como posso ajudar hoje? 😊"
+        )
+
+    prompt = f"""
+    Você é o Fincash, um assistente e consultor financeiro pessoal focado EXCLUSIVAMENTE em finanças, economia, investimentos, planejamento orçamentário, controle de gastos e dicas de economia doméstica.
+
+    Sua tarefa é analisar o texto do usuário: "{texto_usuario}"
+
+    REGRA DE SEGURANÇA E ESCOPO:
+    1. Se a mensagem for sobre finanças, economia, dinheiro, cortes de gastos, investimentos ou tópicos correlatos:
+       - Responda de forma motivadora, clara, prática e amigável em português.
+       - Use formatação Markdown (negrito, listas) e emojis.
+
+    2. Se a mensagem for sobre QUALQUER OUTRO ASSUNTO fora do escopo financeiro:
+       - Responda EXATAMENTE e APENAS com a seguinte frase:
+         "⚠️ Esta mensagem vai contra as diretrizes do nosso sistema. Caso precise de ajuda ou suporte, entre em contato com nosso SAC através do e-mail: aaa@aaa"
+    """
+
+    resposta = cliente_groq.chat.completions.create(
+        model="openai/gpt-oss-120b",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.3,
+    )
+
+    return resposta.choices[0].message.content.strip()
+
+import re
+
+async def processar_mensagem(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    primeiro_nome = update.effective_user.first_name or "Usuário"
+
+    garantir_usuario_existe(user_id, primeiro_nome)
+    texto_usuario = update.message.text.strip()
+    texto_lower = texto_usuario.lower()
+
+    # 1. INTERCEPTADOR DE DELEÇÃO/EXCLUSÃO (Texto livre)
+    padrao_exclusao = r'^(?:apagar|deletar|excluir|remover)\s+(?:id\s*|#\s*)?(\d+)$'
+    match_exclusao = re.match(padrao_exclusao, texto_lower)
+
+    if match_exclusao:
+        id_deletar = int(match_exclusao.group(1))
+        sucesso = deletar_transacao_por_id(user_id, id_deletar)
+
+        if sucesso:
+            await update.message.reply_text(
+                f"🗑️ Lançamento **#{id_deletar:02d}** excluído com sucesso!", 
+                parse_mode="Markdown"
+            )
+        else:
+            await update.message.reply_text(
+                f"❌ Nenhum lançamento encontrado com o ID **#{id_deletar:02d}** na sua conta.", 
+                parse_mode="Markdown"
+            )
+        return
+
+    # 2. INTERCEPTADOR DE RESUMO
+    termos_resumo = ["quanto eu gastei", "quanto gastei", "quanto eu tenho", "meu saldo", "resumo de gastos", "quanto já gastei"]
+    if any(termo in texto_lower for termo in termos_resumo):
+        await comando_resumo(update, context)
+        return
+
+    # 3. INTERPRETAÇÃO DE LANÇAMENTO FINANCEIRO COM A GROQ
+    try:
+        dados = interpretar_mensagem_financeira(texto_usuario)
+
+        if dados.get("valor") and float(dados["valor"]) > 0:
+            transacao_id = salvar_transacao(user_id, dados)
+            id_formatado = f"{transacao_id:02d}"
+            tipo_str = "🟢 Renda" if dados["tipo"] == "renda" else "🔴 Despesa"
+            
+            resposta = (
+                f"✅ **Lançamento Registrado!**\n\n"
+                f"🆔 **ID:** {id_formatado}\n"
+                f"📌 **Descrição:** {dados['descricao']}\n"
+                f"💰 **Valor:** R$ {dados['valor']:.2f}\n"
+                f"🏷️ **Categoria:** {dados['categoria']}\n"
+                f"📊 **Tipo:** {tipo_str}"
+            )
+            await update.message.reply_text(resposta, parse_mode="Markdown")
+            return
+
+    except Exception:
+        pass
+
+    # 4. CONSULTORIA FINANCEIRA COM A GROQ
+    try:
+        await context.bot.send_chat_action(
+            chat_id=update.effective_chat.id, action="typing"
+        )
+        resposta_consultoria = await responder_consultoria(texto_usuario)
+        await update.message.reply_text(resposta_consultoria)
+
+    except Exception as e:
+        print(f"Erro no processamento de mensagem: {e}")
+        await update.message.reply_text(
+            "❌ Ocorreu um erro ao processar sua solicitação."
+        )
+
+async def comando_resumo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+
+    conexao = obter_conexao()
+    cursor = conexao.cursor()
+
+    cursor.execute("""
+        SELECT COALESCE(SUM(valor), 0) 
+        FROM transactions 
+        WHERE telegram_id = %s AND tipo = 'renda';
+    """, (user_id,))
+    total_renda = cursor.fetchone()[0]
+
+    cursor.execute("""
+        SELECT COALESCE(SUM(valor), 0) 
+        FROM transactions 
+        WHERE telegram_id = %s AND tipo = 'despesa';
+    """, (user_id,))
+    total_despesas = cursor.fetchone()[0]
+
+    cursor.execute("""
+        SELECT categoria, SUM(valor) 
+        FROM transactions 
+        WHERE telegram_id = %s AND tipo = 'despesa'
+        GROUP BY categoria
+        ORDER BY SUM(valor) DESC;
+    """, (user_id,))
+    categorias = cursor.fetchall()
+
+    cursor.close()
+    conexao.close()
+
+    saldo = total_renda - total_despesas
+
+    if saldo < 0:
+        alerta_saldo = "⚠️ **Atenção:** Seus gastos superaram a sua renda!"
+    else:
+        alerta_saldo = "✅ **Saúde Financeira:** Saldo positivo!"
+
+    texto_categorias = "\n".join(
+        [f"• **{cat}:** R$ {val:.2f}" for cat, val in categorias]
+    )
+    if not texto_categorias:
+        texto_categorias = "Nenhuma despesa registrada."
+
+    mensagem = (
+        f"📊 **SEU BALANÇO FINANCEIRO**\n\n"
+        f"💵 **Total Recebido (Renda):** R$ {total_renda:.2f}\n"
+        f"💸 **Total Gasto (Despesas):** R$ {total_despesas:.2f}\n"
+        f"⚖️ **Saldo Atual:** R$ {saldo:.2f}\n\n"
+        f"{alerta_saldo}\n\n"
+        f"📁 **Gastos por Categoria:**\n"
+        f"{texto_categorias}"
+    )
+
+    await update.message.reply_text(mensagem, parse_mode="Markdown")
+
+
+# ==========================================
+# COMANDOS ADICIONAIS DO BOT
+# ==========================================
+async def comando_deletar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    
+    if not context.args:
+        await update.message.reply_text("⚠️ **Uso correto:** `/deletar 01` ou `/deletar 5`", parse_mode="Markdown")
+        return
+
+    try:
+        id_deletar = int(context.args[0].replace("#", "").strip())
+    except ValueError:
+        await update.message.reply_text("❌ Informe um número de ID válido.")
+        return
+
+    sucesso = deletar_transacao_por_id(user_id, id_deletar)
+
+    if sucesso:
+        await update.message.reply_text(f"🗑️ Lançamento **#{id_deletar:02d}** excluído com sucesso!", parse_mode="Markdown")
+    else:
+        await update.message.reply_text(f"❌ Nenhum lançamento encontrado com o ID **#{id_deletar:02d}** na sua conta.", parse_mode="Markdown")
+
+
+# ==========================================
+# INICIALIZAÇÃO DA APLICAÇÃO (BOT + WEB)
+# ==========================================
+if __name__ == "__main__":
+    # 1. Cria/atualiza a estrutura das tabelas na base de dados
+    criar_tabelas()
+
+    # 2. Inicia o servidor Web Flask numa thread separada
+    thread_web = threading.Thread(target=rodar_flask)
+    thread_web.daemon = True
+    thread_web.start()
+    print("🌐 Servidor Web rodando em: http://127.0.0.1:5000")
+
+    # 3. Configura e inicia o Bot do Telegram
+    token_telegram = os.getenv("TELEGRAM_BOT_TOKEN")
+    if not token_telegram:
+        print("❌ ERRO: TELEGRAM_BOT_TOKEN não configurado no arquivo .env")
+    else:
+        app = ApplicationBuilder().token(token_telegram).build()
+
+        # Registra os comandos do bot
+        app.add_handler(CommandHandler("resumo", comando_resumo))
+        app.add_handler(CommandHandler("deletar", comando_deletar))
+        app.add_handler(CommandHandler("apagar", comando_deletar))
+        app.add_handler(CommandHandler("excluir", comando_deletar))
+
+        # Registra o processador de mensagens de texto comum
+        app.add_handler(
+            MessageHandler(filters.TEXT & ~filters.COMMAND, processar_mensagem)
+        )
+
+        print("🚀 Bot rodando com sucesso! Aguardando mensagens...")
+        app.run_polling()
