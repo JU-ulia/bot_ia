@@ -1,1 +1,13 @@
-.env 
+# Configurações do VS Code
+.vscode/
+
+# Ambiente Virtual do Python
+venv/
+.venv/
+
+# Arquivos temporários e de cache do Python
+__pycache__/
+*.pyc
+
+# Arquivo de variáveis de ambiente (chaves de API, senhas, etc.)
+.env

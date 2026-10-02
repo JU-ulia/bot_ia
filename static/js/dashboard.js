@@ -42,13 +42,28 @@ document.addEventListener('DOMContentLoaded', async function () {
             return;
         }
         const user = await userRes.json();
-        idUsuarioAtual = user.telegram_id;
+        idUsuarioAtual = user.id || user.user_id || user.telegram_id || user.email || 'me';
 
         // Carrega dados do mês atual
         await carregarDadosDashboard(idUsuarioAtual, mesAtualFormatado);
+
+        // Lembrete de e-mail digitado errado (reverifica a cada 60s, pois o aviso de devolução pode demorar)
+        verificarEmailInvalido();
+        setInterval(verificarEmailInvalido, 60000);
+
+        // Atualiza os números sozinho (lançamentos feitos no Telegram aparecem sem recarregar a página)
+        const recarregar = () => {
+            if (!document.hidden && idUsuarioAtual) {
+                const inputMes = document.getElementById('filtro-mes');
+                carregarDadosDashboard(idUsuarioAtual, inputMes && inputMes.value ? inputMes.value : null);
+            }
+        };
+        setInterval(recarregar, 30000);
+        document.addEventListener('visibilitychange', recarregar);
     } catch (e) {
-        console.error("Erro ao validar sessão:", e);
-        window.location.href = '/login';
+        // Não redireciona mais para /login aqui: só o 401 (acima) significa sessão inválida.
+        // Antes, qualquer erro de JS mandava de volta ao login e parecia que "não entrava".
+        console.error("Erro ao carregar o dashboard:", e);
     }
 });
 
@@ -59,9 +74,9 @@ async function aoMudarMes(mesSelecionado) {
 }
 
 // Busca e atualiza os dados do Dashboard
-async function carregarDadosDashboard(telegramId, mesFiltro = null) {
+async function carregarDadosDashboard(usuarioId, mesFiltro = null) {
     try {
-        let url = `/api/dados-dashboard/${telegramId}`;
+        let url = `/api/dados-dashboard/${usuarioId}`;
         if (mesFiltro) {
             url += `?mes=${mesFiltro}`;
         }
@@ -134,7 +149,6 @@ async function carregarDadosDashboard(telegramId, mesFiltro = null) {
             } else {
                 const pctGasto = Math.round((despesa / renda) * 100);
 
-                // Obtém a proporção de dias passados no mês
                 const hoje = new Date();
                 const diaAtual = hoje.getDate();
                 const ultimoDiaMes = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0).getDate();
@@ -160,7 +174,7 @@ async function carregarDadosDashboard(telegramId, mesFiltro = null) {
 
         // 7. ATUALIZA STATUS DO CHATBOT DINAMICAMENTE
         if (dados.chatbot) {
-            atualizarStatusChatbot(dados.chatbot.ultima_atividade);
+            atualizarStatusChatbot(dados.chatbot.ultima_atividade, dados.chatbot.vinculado);
         }
 
     } catch (erro) {
@@ -169,19 +183,13 @@ async function carregarDadosDashboard(telegramId, mesFiltro = null) {
     }
 }
 
-// Atualiza o cartão visual de Alerta de Risco
-// Atualiza o cartão visual de Alerta de Risco
 function updateAIAlerts(pctGasto, semDados = false, mensagemIA = "", nivelRisco = "Baixo") {
-    // Elementos do Cabeçalho (Ícone e Contentor)
     const riskIconBoxEl = document.getElementById('risk-icon-box');
     const riskIconEl = document.getElementById('risk-icon');
-
-    // Elementos do Corpo do Card
     const riskStatusEl = document.getElementById('risk-status');
     const riskDescEl = document.getElementById('risk-description');
     const riskBarEl = document.getElementById('risk-bar');
 
-    // CASO 1: Sem Dados no Mês
     if (semDados) {
         if (riskIconBoxEl) riskIconBoxEl.className = "w-10 h-10 rounded-xl bg-slate-100 text-slate-500 flex items-center justify-center font-bold text-lg shadow-sm transition-colors";
         if (riskIconEl) riskIconEl.className = "fa-solid fa-circle-info text-slate-500";
@@ -200,7 +208,6 @@ function updateAIAlerts(pctGasto, semDados = false, mensagemIA = "", nivelRisco 
         return;
     }
 
-    // Definição das cores consoante o Nível de Risco
     let bgIcone = 'bg-emerald-100';
     let textIcone = 'text-emerald-600';
     let corTexto = 'text-emerald-600';
@@ -221,7 +228,6 @@ function updateAIAlerts(pctGasto, semDados = false, mensagemIA = "", nivelRisco 
         statusText = 'Atenção (Risco Moderado)';
     }
 
-    // 1. Atualiza a Cor da Caixa e do Ícone do Topo
     if (riskIconBoxEl) {
         riskIconBoxEl.className = `w-10 h-10 rounded-xl ${bgIcone} ${textIcone} flex items-center justify-center font-bold text-lg shadow-sm transition-colors`;
     }
@@ -229,19 +235,16 @@ function updateAIAlerts(pctGasto, semDados = false, mensagemIA = "", nivelRisco 
         riskIconEl.className = `fa-solid fa-triangle-exclamation ${textIcone}`;
     }
 
-    // 2. Atualiza o Status do Risco
     if (riskStatusEl) {
         riskStatusEl.textContent = statusText;
         riskStatusEl.className = `text-base font-bold ${corTexto}`;
     }
 
-    // 3. Atualiza a Barra de Progresso
     if (riskBarEl) {
         riskBarEl.style.width = `${Math.min(pctGasto, 100)}%`;
         riskBarEl.className = `h-full rounded-full transition-all duration-500 ${corBg}`;
     }
 
-    // 4. Renderiza a Descrição e a Caixa Amarela com a Mensagem da IA
     if (riskDescEl) {
         riskDescEl.innerHTML = `
             <div class="space-y-3 mt-1">
@@ -249,7 +252,6 @@ function updateAIAlerts(pctGasto, semDados = false, mensagemIA = "", nivelRisco 
                     Despesas Atuais: <span class="font-bold ${corTexto}">${pctGasto}%</span> da Renda Estimada
                 </p>
 
-                <!-- MENSAGEM AMARELA DE ESTIMATIVA DA IA -->
                 <div class="p-3 bg-amber-50 border border-amber-200/80 rounded-xl flex items-start gap-2.5 text-left">
                     <i class="fa-solid fa-wand-magic-sparkles text-amber-500 text-sm mt-0.5 shrink-0"></i>
                     <div class="text-xs text-amber-900 leading-relaxed">
@@ -261,7 +263,7 @@ function updateAIAlerts(pctGasto, semDados = false, mensagemIA = "", nivelRisco 
         `;
     }
 }
-// Inicializadores dos Gráficos com Chart.js
+
 function initCategoryChart() {
     const canvas = document.getElementById('categoryChart');
     if (!canvas) return;
@@ -343,21 +345,19 @@ function setUserName(name) {
     if (el) el.textContent = name;
 }
 
-// Função para atualizar visualmente o Card do Chatbot conforme os dados do mês
-function atualizarStatusChatbot(ultimaAtividade) {
+function atualizarStatusChatbot(ultimaAtividade, vinculado = false) {
     const badgeEl = document.getElementById('bot-status-badge');
     const updateTextEl = document.getElementById('bot-last-update');
     const boxEl = document.getElementById('bot-connection-box');
     const connTextEl = document.getElementById('bot-connection-text');
 
-    if (ultimaAtividade) {
-        // --- ESTADO ATIVO (Houve lançamentos no mês selecionado) ---
+    if (ultimaAtividade || vinculado) {
         if (badgeEl) {
             badgeEl.className = "p-1.5 bg-emerald-100 text-emerald-700 rounded-lg text-xs font-semibold flex items-center gap-1";
             badgeEl.innerHTML = `<i class="fa-solid fa-robot"></i> Ativo`;
         }
         if (updateTextEl) {
-            updateTextEl.textContent = ultimaAtividade;
+            updateTextEl.textContent = ultimaAtividade || 'Nenhum lançamento neste mês ainda';
         }
         if (boxEl && connTextEl) {
             boxEl.className = "p-3 bg-emerald-50 border border-emerald-200/60 rounded-xl transition-all";
@@ -365,18 +365,143 @@ function atualizarStatusChatbot(ultimaAtividade) {
             connTextEl.innerHTML = `<i class="fa-solid fa-circle-check text-emerald-500"></i> Conectado ao Telegram`;
         }
     } else {
-        // --- ESTADO INATIVO (Sem registros no mês selecionado) ---
         if (badgeEl) {
-            badgeEl.className = "p-1.5 bg-red-100 text-red-700 rounded-lg text-xs font-semibold flex items-center gap-1";
-            badgeEl.innerHTML = `<i class="fa-solid fa-robot"></i> Inativo`;
+            badgeEl.className = "p-1.5 bg-amber-100 text-amber-700 rounded-lg text-xs font-semibold flex items-center gap-1";
+            badgeEl.innerHTML = `<i class="fa-solid fa-robot"></i> Aguardando Vínculo`;
         }
         if (updateTextEl) {
-            updateTextEl.textContent = "Sem registros no período";
+            updateTextEl.textContent = "Aguardando mensagens ou vínculo via /login";
         }
         if (boxEl && connTextEl) {
-            boxEl.className = "p-3 bg-red-50 border border-red-200/60 rounded-xl transition-all";
-            connTextEl.className = "text-red-800 text-sm font-medium flex items-center gap-2";
-            connTextEl.innerHTML = `<i class="fa-solid fa-circle-xmark text-red-500"></i> Desconectado neste mês`;
+            boxEl.className = "p-3 bg-amber-50 border border-amber-200/60 rounded-xl transition-all";
+            connTextEl.className = "text-amber-800 text-sm font-medium flex items-center gap-2";
+            connTextEl.innerHTML = `<i class="fa-solid fa-circle-exclamation text-amber-500"></i> Envie /login no Telegram para sincronizar`;
         }
+    }
+}
+
+// ==========================================
+// LEMBRETE: E-MAIL DIGITADO ERRADO
+// ==========================================
+function escaparHtml(texto) {
+    const d = document.createElement('div');
+    d.textContent = texto == null ? '' : String(texto);
+    return d.innerHTML;
+}
+
+function obterContainerAlertaEmail() {
+    let container = document.getElementById('email-alert-container');
+    if (!container) {
+        container = document.createElement('div');
+        container.id = 'email-alert-container';
+        (document.querySelector('main') || document.body).prepend(container);
+    }
+    return container;
+}
+
+async function verificarEmailInvalido() {
+    try {
+        const res = await fetch('/api/email-status');
+        if (res.status === 401) {
+            // Sessão criada antes do user_id existir: sai para entrar de novo com a sessão atualizada
+            window.location.href = '/logout';
+            return;
+        }
+        if (!res.ok) return;
+        const info = await res.json();
+
+        if (info.email_invalido) {
+            mostrarAlertaEmail(info.email);
+        } else {
+            const container = document.getElementById('email-alert-container');
+            if (container) container.innerHTML = '';
+        }
+    } catch (e) {
+        console.error('Erro ao verificar e-mail:', e);
+    }
+}
+
+function mostrarAlertaEmail(emailErrado) {
+    const container = obterContainerAlertaEmail();
+    // Não redesenha enquanto o usuário está digitando o novo e-mail
+    if (container.dataset.editando === '1') return;
+
+    container.innerHTML = `
+        <div class="mb-4 p-4 bg-red-50 border border-red-200 rounded-xl">
+            <div class="flex items-start gap-3">
+                <i class="fa-solid fa-triangle-exclamation text-red-500 mt-0.5"></i>
+                <div class="flex-1 text-sm text-red-900">
+                    <p>
+                        Não conseguimos entregar e-mails para <strong>${escaparHtml(emailErrado)}</strong>.
+                        Parece que ele foi digitado errado.
+                        <button type="button" onclick="abrirEdicaoEmail()" class="font-semibold underline hover:text-red-700">Clique aqui para editar</button>
+                    </p>
+
+                    <div id="email-edit-area" class="hidden mt-3 flex flex-col sm:flex-row gap-2">
+                        <input type="email" id="novo-email-input" placeholder="seu@email.com"
+                               class="flex-1 px-3 py-2 rounded-lg border border-red-200 bg-white text-slate-800 focus:outline-none focus:border-red-400">
+                        <button type="button" id="btn-salvar-email" onclick="salvarNovoEmail()"
+                                class="px-4 py-2 bg-red-600 hover:bg-red-500 text-white font-semibold rounded-lg transition">
+                            Salvar
+                        </button>
+                    </div>
+                    <p id="email-edit-msg" class="hidden mt-2 text-xs font-medium"></p>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function abrirEdicaoEmail() {
+    const container = obterContainerAlertaEmail();
+    container.dataset.editando = '1';
+    document.getElementById('email-edit-area').classList.remove('hidden');
+    document.getElementById('novo-email-input').focus();
+}
+
+async function salvarNovoEmail() {
+    const input = document.getElementById('novo-email-input');
+    const btn = document.getElementById('btn-salvar-email');
+    const msgEl = document.getElementById('email-edit-msg');
+    const novoEmail = input.value.trim();
+
+    msgEl.classList.remove('hidden');
+    if (!novoEmail || !novoEmail.includes('@')) {
+        msgEl.className = 'mt-2 text-xs font-medium text-red-700';
+        msgEl.textContent = 'Digite um e-mail válido.';
+        return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = 'Salvando...';
+
+    try {
+        const res = await fetch('/api/atualizar-email', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: novoEmail })
+        });
+        const data = await res.json();
+
+        if (res.ok) {
+            const container = obterContainerAlertaEmail();
+            container.dataset.editando = '0';
+            container.innerHTML = `
+                <div class="mb-4 p-4 bg-emerald-50 border border-emerald-200 rounded-xl text-sm text-emerald-800 flex items-center gap-2">
+                    <i class="fa-solid fa-circle-check text-emerald-500"></i>
+                    E-mail atualizado para <strong>${escaparHtml(data.email)}</strong>. Enviamos uma mensagem de confirmação.
+                </div>`;
+            setTimeout(() => { container.innerHTML = ''; }, 6000);
+        } else {
+            msgEl.className = 'mt-2 text-xs font-medium text-red-700';
+            msgEl.textContent = data.erro || 'Não foi possível atualizar o e-mail.';
+            btn.disabled = false;
+            btn.textContent = 'Salvar';
+        }
+    } catch (e) {
+        msgEl.className = 'mt-2 text-xs font-medium text-red-700';
+        msgEl.textContent = 'Erro de conexão com o servidor.';
+        btn.disabled = false;
+        btn.textContent = 'Salvar';
     }
 }

@@ -42,7 +42,7 @@
         </div>
 
         <nav class="flex-1 px-4 py-6 space-y-2 overflow-y-auto">
-            <a href="#" class="flex items-center gap-3 px-4 py-3 bg-brand-active text-white font-medium rounded-xl transition duration-200 shadow-sm border-l-4 border-blue-500">
+            <a href="/" class="flex items-center gap-3 px-4 py-3 bg-brand-active text-white font-medium rounded-xl transition duration-200 shadow-sm border-l-4 border-blue-500">
                 <i class="fa-solid fa-square-poll-vertical w-5 text-blue-400"></i>
                 <span>Visão Geral</span>
             </a>
@@ -58,6 +58,10 @@
                 <i class="fa-solid fa-chart-pie w-5"></i>
                 <span>Relatórios</span>
             </a>
+            <a href="/perfil" class="flex items-center gap-3 px-4 py-3 text-slate-300 hover:bg-slate-800/60 hover:text-white font-medium rounded-xl transition duration-200">
+                <i class="fa-solid fa-user w-5"></i>
+                <span>Meu Perfil</span>
+            </a>
         </nav>
 
         <div class="p-4 border-t border-slate-700/50">
@@ -70,7 +74,7 @@
 
     <!-- Main Content Area -->
     <div class="flex-1 flex flex-col h-full overflow-hidden">
-        
+
         <!-- Top Header Bar -->
         <header class="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between shadow-sm z-10">
             <div class="flex items-center gap-4">
@@ -87,18 +91,21 @@
                     <input type="month" id="filtro-mes" class="bg-transparent text-sm font-semibold text-slate-700 focus:outline-none cursor-pointer pr-2" onchange="aoMudarMes(this.value)" />
                 </div>
 
-                <!-- Perfil do Usuário -->
-                <div class="flex items-center gap-3">
+                <!-- Perfil do Usuário (clique para abrir o perfil) -->
+                <a href="/perfil" class="flex items-center gap-3" title="Meu perfil">
                     <span class="font-medium text-slate-700 hidden sm:inline-block" id="user-name">Carregando...</span>
                     <img src="https://placehold.co/100x100/2563eb/ffffff?text=U" alt="Perfil do Usuário" class="w-10 h-10 rounded-full border-2 border-blue-500 shadow-sm object-cover">
-                </div>
+                </a>
             </div>
         </header>
 
         <!-- Main Dashboard Content -->
         <main class="flex-1 overflow-y-auto p-4 md:p-6 bg-slate-100">
             <div class="max-w-7xl mx-auto space-y-6">
-                
+
+                <!-- Lembrete de e-mail digitado errado (preenchido pelo dashboard.js) -->
+                <div id="email-alert-container"></div>
+
                 <!-- CARD DE POUPANÇA / RESERVA DE EMERGÊNCIA -->
                 <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-200/80 flex items-center justify-between">
                     <div class="flex items-center gap-4">
@@ -142,27 +149,27 @@
 
                     <!-- CARD 3: Status Chatbot -->
                     <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-200/80 flex flex-col justify-between">
-                     <div>
-                         <div class="flex items-center justify-between mb-4">
+                        <div>
+                            <div class="flex items-center justify-between mb-4">
                                 <h2 class="text-xs font-bold tracking-wider text-slate-600 uppercase">Status Chatbot</h2>
-                              <!-- Badge de Status Ativo/Inativo -->
-                             <span id="bot-status-badge" class="p-1.5 bg-emerald-100 text-emerald-600 rounded-lg text-xs font-semibold flex items-center gap-1">
-                                 <i class="fa-solid fa-robot"></i> Ativo
-                              </span>
-                         </div>
-                         <div class="space-y-3 mt-2">
-                              <p class="text-sm text-slate-500 font-medium">
-                                   Última atividade: <span class="text-slate-700 font-semibold" id="bot-last-update">--/--/----</span>
+                                <!-- Badge de Status Ativo/Inativo -->
+                                <span id="bot-status-badge" class="p-1.5 bg-emerald-100 text-emerald-600 rounded-lg text-xs font-semibold flex items-center gap-1">
+                                    <i class="fa-solid fa-robot"></i> Ativo
+                                </span>
+                            </div>
+                            <div class="space-y-3 mt-2">
+                                <p class="text-sm text-slate-500 font-medium">
+                                    Última atividade: <span class="text-slate-700 font-semibold" id="bot-last-update">--/--/----</span>
                                 </p>
-                             <!-- Caixinha de Conexão -->
-                              <div id="bot-connection-box" class="p-3 bg-emerald-50 border border-emerald-100 rounded-xl">
-                                 <p id="bot-connection-text" class="text-emerald-800 text-sm font-medium flex items-center gap-2">
-                                     <i class="fa-solid fa-circle-check text-emerald-500"></i>
-                                      Conectado ao Telegram
-                                  </p>
-                              </div>
-                         </div>
-                     </div>
+                                <!-- Caixinha de Conexão -->
+                                <div id="bot-connection-box" class="p-3 bg-emerald-50 border border-emerald-100 rounded-xl">
+                                    <p id="bot-connection-text" class="text-emerald-800 text-sm font-medium flex items-center gap-2">
+                                        <i class="fa-solid fa-circle-check text-emerald-500"></i>
+                                        Conectado ao Telegram
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
                     </div>
 
                     <!-- CARD 4: Evoluções de Saldo -->
@@ -178,25 +185,27 @@
 
                     <!-- CARD 5: Risco (Alerta IA) -->
                     <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-200/80 flex flex-col justify-between">
-                     <div>
-                         <div class="flex items-center gap-3 mb-4">
-                               <!-- IDs adicionados e classes base de transição -->
-                               <div id="risk-icon-box" class="w-10 h-10 rounded-xl bg-slate-100 text-slate-500 flex items-center justify-center font-bold text-lg shadow-sm transition-colors">
-                                 <i id="risk-icon" class="fa-solid fa-triangle-exclamation"></i>
-                              </div>
+                        <div>
+                            <div class="flex items-center gap-3 mb-4">
+                                <div id="risk-icon-box" class="w-10 h-10 rounded-xl bg-slate-100 text-slate-500 flex items-center justify-center font-bold text-lg shadow-sm transition-colors">
+                                    <i id="risk-icon" class="fa-solid fa-triangle-exclamation"></i>
+                                </div>
                                 <h2 class="text-xs font-bold tracking-wider text-slate-600 uppercase">Risco</h2>
-                          </div>
+                            </div>
                             <div class="space-y-3">
-                               <p class="text-base font-bold text-slate-800" id="risk-status">Calculando...</p>
-                              <div id="risk-description">
-                                 <p class="text-sm font-medium text-slate-700">Aguardando dados...</p>
-                         </div>
-                       </div>
+                                <p class="text-base font-bold text-slate-800" id="risk-status">Calculando...</p>
+                                <div id="risk-description">
+                                    <p class="text-sm font-medium text-slate-700">Aguardando dados...</p>
+                                </div>
+                            </div>
                         </div>
                         <div class="w-full bg-slate-100 h-2 rounded-full overflow-hidden mt-4">
-                          <div id="risk-bar" class="bg-emerald-500 h-full rounded-full transition-all duration-500" style="width: 0%;"></div>
-                     </div>
+                            <div id="risk-bar" class="bg-emerald-500 h-full rounded-full transition-all duration-500" style="width: 0%;"></div>
+                        </div>
                     </div>
+
+                </div><!-- fim do grid -->
+            </div><!-- fim do container -->
         </main>
     </div>
 
