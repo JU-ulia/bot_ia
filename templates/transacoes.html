@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>fincash - Transações</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = { theme: { extend: { colors: { 'brand-sidebar': '#0f172a', 'brand-active': '#1e293b' } } } }
+    </script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>body { font-family: 'Inter', sans-serif; }</style>
+</head>
+<body class="bg-slate-100 text-slate-800 antialiased flex h-screen overflow-hidden">
+
+    <div id="sidebar-backdrop" onclick="toggleSidebar()" class="fixed inset-0 bg-slate-900/50 z-20 hidden lg:hidden transition-opacity"></div>
+
+    <!-- Sidebar -->
+    <aside id="sidebar" class="fixed lg:static inset-y-0 left-0 z-30 w-64 bg-brand-sidebar text-white flex flex-col transform -translate-x-full lg:translate-x-0 transition-transform duration-300 ease-in-out shadow-xl">
+        <div class="p-6 flex items-center gap-3 border-b border-slate-700/50">
+            <div class="bg-blue-600 p-2 rounded-lg text-white flex items-center justify-center shadow-lg">
+                <i class="fa-solid fa-chart-line text-xl"></i>
+            </div>
+            <span class="text-2xl font-extrabold tracking-tight text-white">fincash</span>
+        </div>
+
+        <nav class="flex-1 px-4 py-6 space-y-2 overflow-y-auto">
+            <a href="/" class="flex items-center gap-3 px-4 py-3 text-slate-300 hover:bg-slate-800/60 hover:text-white font-medium rounded-xl transition duration-200">
+                <i class="fa-solid fa-square-poll-vertical w-5"></i>
+                <span>Visão Geral</span>
+            </a>
+            <a href="/transacoes" class="flex items-center gap-3 px-4 py-3 bg-brand-active text-white font-medium rounded-xl transition duration-200 shadow-sm border-l-4 border-blue-500">
+                <i class="fa-solid fa-arrow-right-arrow-left w-5 text-blue-400"></i>
+                <span>Transações</span>
+            </a>
+            <a href="/orcamentos" class="flex items-center gap-3 px-4 py-3 text-slate-300 hover:bg-slate-800/60 hover:text-white font-medium rounded-xl transition duration-200">
+                <i class="fa-solid fa-wallet w-5"></i>
+                <span>Orçamentos</span>
+            </a>
+            <a href="/relatorios" class="flex items-center gap-3 px-4 py-3 text-slate-300 hover:bg-slate-800/60 hover:text-white font-medium rounded-xl transition duration-200">
+                <i class="fa-solid fa-chart-pie w-5"></i>
+                <span>Relatórios</span>
+            </a>
+            <a href="/perfil" class="flex items-center gap-3 px-4 py-3 text-slate-300 hover:bg-slate-800/60 hover:text-white font-medium rounded-xl transition duration-200">
+                <i class="fa-solid fa-user w-5"></i>
+                <span>Meu Perfil</span>
+            </a>
+        </nav>
+
+        <div class="p-4 border-t border-slate-700/50">
+            <a href="/logout" class="flex items-center gap-3 px-4 py-2.5 text-red-400 hover:bg-red-500/10 hover:text-red-300 rounded-xl transition font-medium text-sm">
+                <i class="fa-solid fa-right-from-bracket"></i>
+                <span>Sair da conta</span>
+            </a>
+        </div>
+    </aside>
+
+    <!-- Conteúdo -->
+    <div class="flex-1 flex flex-col h-full overflow-hidden">
+
+        <header class="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between shadow-sm z-10">
+            <div class="flex items-center gap-4">
+                <button onclick="toggleSidebar()" class="lg:hidden text-slate-600 hover:text-slate-900 focus:outline-none p-1" aria-label="Abrir menu">
+                    <i class="fa-solid fa-bars text-xl"></i>
+                </button>
+                <h1 class="text-2xl font-bold text-slate-800 tracking-tight">Transações</h1>
+            </div>
+            <div class="flex items-center gap-3">
+                <div class="flex items-center bg-slate-50 p-2 rounded-xl border border-slate-200">
+                    <i class="fa-solid fa-calendar-days text-slate-500 pl-2 pr-1"></i>
+                    <input type="month" id="filtro-mes" class="bg-transparent text-sm font-semibold text-slate-700 focus:outline-none cursor-pointer pr-2" />
+                </div>
+                <button id="btn-limpar-mes" class="hidden text-sm font-medium text-blue-600 hover:text-blue-500">Todo o período</button>
+            </div>
+        </header>
+
+        <main class="flex-1 overflow-y-auto p-4 md:p-6 bg-slate-100">
+            <div class="max-w-7xl mx-auto space-y-6">
+
+                <!-- Resumo do filtro atual -->
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                    <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-200/80 flex items-center gap-4">
+                        <div class="w-12 h-12 rounded-xl bg-emerald-100 text-emerald-600 flex items-center justify-center text-xl"><i class="fa-solid fa-arrow-down"></i></div>
+                        <div>
+                            <span class="text-xs font-semibold text-slate-400">Entradas</span>
+                            <p class="text-xl font-extrabold text-emerald-600" id="total-entradas">R$ 0,00</p>
+                        </div>
+                    </div>
+                    <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-200/80 flex items-center gap-4">
+                        <div class="w-12 h-12 rounded-xl bg-red-100 text-red-500 flex items-center justify-center text-xl"><i class="fa-solid fa-arrow-up"></i></div>
+                        <div>
+                            <span class="text-xs font-semibold text-slate-400">Saídas</span>
+                            <p class="text-xl font-extrabold text-red-500" id="total-saidas">R$ 0,00</p>
+                        </div>
+                    </div>
+                    <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-200/80 flex items-center gap-4">
+                        <div class="w-12 h-12 rounded-xl bg-blue-100 text-blue-600 flex items-center justify-center text-xl"><i class="fa-solid fa-scale-balanced"></i></div>
+                        <div>
+                            <span class="text-xs font-semibold text-slate-400">Saldo</span>
+                            <p class="text-xl font-extrabold text-slate-800" id="total-saldo">R$ 0,00</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Lista -->
+                <div class="bg-white rounded-2xl shadow-sm border border-slate-200/80">
+                    <div class="p-4 md:p-5 border-b border-slate-100 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                        <div class="inline-flex rounded-xl bg-slate-100 p-1 text-sm font-semibold self-start" id="filtro-tipo">
+                            <button data-tipo="" class="px-4 py-1.5 rounded-lg bg-white text-slate-800 shadow-sm">Todas</button>
+                            <button data-tipo="renda" class="px-4 py-1.5 rounded-lg text-slate-500 hover:text-slate-800">Entradas</button>
+                            <button data-tipo="despesa" class="px-4 py-1.5 rounded-lg text-slate-500 hover:text-slate-800">Saídas</button>
+                        </div>
+                        <div class="relative md:w-72">
+                            <i class="fa-solid fa-magnifying-glass absolute left-3.5 top-3.5 text-slate-400 text-sm"></i>
+                            <input type="search" id="busca" placeholder="Buscar por descrição ou categoria" class="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:border-blue-500">
+                        </div>
+                    </div>
+
+                    <!-- Tabela (desktop) -->
+                    <div class="hidden md:block overflow-x-auto">
+                        <table class="w-full text-sm">
+                            <thead>
+                                <tr class="text-left text-xs font-semibold text-slate-400 border-b border-slate-100">
+                                    <th class="px-5 py-3">ID</th>
+                                    <th class="px-5 py-3">Data</th>
+                                    <th class="px-5 py-3">Descrição</th>
+                                    <th class="px-5 py-3">Categoria</th>
+                                    <th class="px-5 py-3">Tipo</th>
+                                    <th class="px-5 py-3 text-right">Valor</th>
+                                </tr>
+                            </thead>
+                            <tbody id="tabela-corpo" class="divide-y divide-slate-100"></tbody>
+                        </table>
+                    </div>
+
+                    <!-- Cartões (mobile) -->
+                    <div id="lista-mobile" class="md:hidden divide-y divide-slate-100"></div>
+
+                    <!-- Estados vazio / erro -->
+                    <div id="estado" class="hidden px-6 py-14 text-center">
+                        <div class="w-14 h-14 mx-auto mb-4 rounded-2xl bg-slate-100 text-slate-400 flex items-center justify-center text-2xl">
+                            <i id="estado-icone" class="fa-solid fa-receipt"></i>
+                        </div>
+                        <p id="estado-titulo" class="font-bold text-slate-700"></p>
+                        <p id="estado-texto" class="text-sm text-slate-500 mt-1"></p>
+                    </div>
+
+                    <div id="rodape" class="px-5 py-3 border-t border-slate-100 text-xs text-slate-400 hidden"></div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        function toggleSidebar() {
+            document.getElementById('sidebar').classList.toggle('-translate-x-full');
+            document.getElementById('sidebar-backdrop').classList.toggle('hidden');
+        }
+
+        const brl = (n) => Number(n).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+        const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+        let transacoes = [];
+        let tipoAtual = '';
+        let mes = '';
+
+        const elMes = document.getElementById('filtro-mes');
+        const elLimpar = document.getElementById('btn-limpar-mes');
+        const elBusca = document.getElementById('busca');
+
+        async function carregar() {
+            try {
+                const params = new URLSearchParams();
+                if (mes) params.set('mes', mes);
+                const res = await fetch('/api/transacoes?' + params.toString());
+                if (res.status === 401) { window.location.href = '/login'; return; }
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.erro || 'Falha ao carregar');
+                transacoes = data.transacoes;
+                semVinculo = !data.vinculado;
+                render();
+            } catch (e) {
+                mostrarEstado('fa-triangle-exclamation', 'Não foi possível carregar as transações', 'Verifique sua conexão e recarregue a página.');
+            }
+        }
+        let semVinculo = false;
+
+        function filtradas() {
+            const q = elBusca.value.trim().toLowerCase();
+            return transacoes.filter(t =>
+                (!tipoAtual || t.tipo === tipoAtual) &&
+                (!q || (t.descricao || '').toLowerCase().includes(q) || (t.categoria || '').toLowerCase().includes(q))
+            );
+        }
+
+        function mostrarEstado(icone, titulo, texto) {
+            document.getElementById('estado').classList.remove('hidden');
+            document.getElementById('estado-icone').className = 'fa-solid ' + icone;
+            document.getElementById('estado-titulo').textContent = titulo;
+            document.getElementById('estado-texto').textContent = texto;
+            document.getElementById('tabela-corpo').innerHTML = '';
+            document.getElementById('lista-mobile').innerHTML = '';
+            document.getElementById('rodape').classList.add('hidden');
+        }
+
+        function render() {
+            const lista = filtradas();
+
+            let entradas = 0, saidas = 0;
+            lista.forEach(t => { t.tipo === 'renda' ? entradas += t.valor : saidas += t.valor; });
+            document.getElementById('total-entradas').textContent = brl(entradas);
+            document.getElementById('total-saidas').textContent = brl(saidas);
+            const saldo = entradas - saidas;
+            const elSaldo = document.getElementById('total-saldo');
+            elSaldo.textContent = brl(saldo);
+            elSaldo.className = 'text-xl font-extrabold ' + (saldo < 0 ? 'text-red-500' : 'text-slate-800');
+
+            if (semVinculo) {
+                mostrarEstado('fa-link', 'Telegram ainda não vinculado', 'Envie /login no Telegram para ver seus lançamentos aqui.');
+                return;
+            }
+            if (!lista.length) {
+                const filtrando = tipoAtual || elBusca.value.trim() || mes;
+                mostrarEstado('fa-receipt',
+                    filtrando ? 'Nenhum lançamento neste filtro' : 'Nenhum lançamento ainda',
+                    filtrando ? 'Mude o mês, o tipo ou a busca.' : 'Envie um gasto ou uma renda para o bot no Telegram, como "gastei 25 no almoço".');
+                return;
+            }
+
+            document.getElementById('estado').classList.add('hidden');
+
+            document.getElementById('tabela-corpo').innerHTML = lista.map(t => {
+                const entrada = t.tipo === 'renda';
+                return `
+                <tr class="hover:bg-slate-50">
+                    <td class="px-5 py-3.5 font-semibold text-slate-500">#${String(t.id).padStart(2, '0')}</td>
+                    <td class="px-5 py-3.5 text-slate-600 whitespace-nowrap">${esc(t.data_fmt)}</td>
+                    <td class="px-5 py-3.5 font-medium text-slate-800">${esc(t.descricao) || '<span class="text-slate-400">Sem descrição</span>'}</td>
+                    <td class="px-5 py-3.5"><span class="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-600 text-xs font-medium">${esc(t.categoria) || 'Sem categoria'}</span></td>
+                    <td class="px-5 py-3.5">
+                        <span class="inline-flex items-center gap-1.5 text-xs font-semibold ${entrada ? 'text-emerald-600' : 'text-red-500'}">
+                            <i class="fa-solid ${entrada ? 'fa-arrow-down' : 'fa-arrow-up'}"></i>${entrada ? 'Entrada' : 'Saída'}
+                        </span>
+                    </td>
+                    <td class="px-5 py-3.5 text-right font-bold whitespace-nowrap ${entrada ? 'text-emerald-600' : 'text-red-500'}">${entrada ? '+' : '-'} ${brl(t.valor)}</td>
+                </tr>`;
+            }).join('');
+
+            document.getElementById('lista-mobile').innerHTML = lista.map(t => {
+                const entrada = t.tipo === 'renda';
+                return `
+                <div class="p-4 flex items-start gap-3">
+                    <div class="w-10 h-10 shrink-0 rounded-xl flex items-center justify-center ${entrada ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-500'}">
+                        <i class="fa-solid ${entrada ? 'fa-arrow-down' : 'fa-arrow-up'}"></i>
+                    </div>
+                    <div class="min-w-0 flex-1">
+                        <p class="font-semibold text-slate-800 truncate">${esc(t.descricao) || 'Sem descrição'}</p>
+                        <p class="text-xs text-slate-500 mt-0.5">${esc(t.categoria) || 'Sem categoria'} • ${esc(t.data_fmt)}</p>
+                        <p class="text-xs text-slate-400 mt-0.5">ID #${String(t.id).padStart(2, '0')}</p>
+                    </div>
+                    <p class="font-bold whitespace-nowrap ${entrada ? 'text-emerald-600' : 'text-red-500'}">${entrada ? '+' : '-'} ${brl(t.valor)}</p>
+                </div>`;
+            }).join('');
+
+            const rodape = document.getElementById('rodape');
+            rodape.classList.remove('hidden');
+            rodape.textContent = lista.length + (lista.length === 1 ? ' lançamento' : ' lançamentos') + '. Para excluir, envie "excluir ID" no Telegram.';
+        }
+
+        // Filtro de tipo
+        document.querySelectorAll('#filtro-tipo button').forEach(btn => {
+            btn.addEventListener('click', () => {
+                tipoAtual = btn.dataset.tipo;
+                document.querySelectorAll('#filtro-tipo button').forEach(b => {
+                    const ativo = b === btn;
+                    b.className = 'px-4 py-1.5 rounded-lg ' + (ativo ? 'bg-white text-slate-800 shadow-sm' : 'text-slate-500 hover:text-slate-800');
+                });
+                render();
+            });
+        });
+
+        elBusca.addEventListener('input', render);
+
+        elMes.addEventListener('change', () => {
+            mes = elMes.value;
+            elLimpar.classList.toggle('hidden', !mes);
+            carregar();
+        });
+        elLimpar.addEventListener('click', () => {
+            elMes.value = '';
+            mes = '';
+            elLimpar.classList.add('hidden');
+            carregar();
+        });
+
+        carregar();
+    </script>
+</body>
+</html>

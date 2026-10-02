@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>fincash - Relatórios</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = { theme: { extend: { colors: { 'brand-sidebar': '#0f172a', 'brand-active': '#1e293b' } } } }
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        @media print {
+            #sidebar, #sidebar-backdrop, .no-print { display: none !important; }
+            body { display: block !important; height: auto !important; overflow: visible !important; background: #fff !important; }
+            .print-root, .print-main { overflow: visible !important; height: auto !important; }
+            .print-card { break-inside: avoid; box-shadow: none !important; }
+        }
+    </style>
+</head>
+<body class="bg-slate-100 text-slate-800 antialiased flex h-screen overflow-hidden">
+
+    <div id="sidebar-backdrop" onclick="toggleSidebar()" class="fixed inset-0 bg-slate-900/50 z-20 hidden lg:hidden transition-opacity"></div>
+
+    <aside id="sidebar" class="fixed lg:static inset-y-0 left-0 z-30 w-64 bg-brand-sidebar text-white flex flex-col transform -translate-x-full lg:translate-x-0 transition-transform duration-300 ease-in-out shadow-xl">
+        <div class="p-6 flex items-center gap-3 border-b border-slate-700/50">
+            <div class="bg-blue-600 p-2 rounded-lg text-white flex items-center justify-center shadow-lg">
+                <i class="fa-solid fa-chart-line text-xl"></i>
+            </div>
+            <span class="text-2xl font-extrabold tracking-tight text-white">fincash</span>
+        </div>
+
+        <nav class="flex-1 px-4 py-6 space-y-2 overflow-y-auto">
+            <a href="/" class="flex items-center gap-3 px-4 py-3 text-slate-300 hover:bg-slate-800/60 hover:text-white font-medium rounded-xl transition duration-200">
+                <i class="fa-solid fa-square-poll-vertical w-5"></i>
+                <span>Visão Geral</span>
+            </a>
+            <a href="/transacoes" class="flex items-center gap-3 px-4 py-3 text-slate-300 hover:bg-slate-800/60 hover:text-white font-medium rounded-xl transition duration-200">
+                <i class="fa-solid fa-arrow-right-arrow-left w-5"></i>
+                <span>Transações</span>
+            </a>
+            <a href="/orcamentos" class="flex items-center gap-3 px-4 py-3 text-slate-300 hover:bg-slate-800/60 hover:text-white font-medium rounded-xl transition duration-200">
+                <i class="fa-solid fa-wallet w-5"></i>
+                <span>Orçamentos</span>
+            </a>
+            <a href="/relatorios" class="flex items-center gap-3 px-4 py-3 bg-brand-active text-white font-medium rounded-xl transition duration-200 shadow-sm border-l-4 border-blue-500">
+                <i class="fa-solid fa-chart-pie w-5 text-blue-400"></i>
+                <span>Relatórios</span>
+            </a>
+            <a href="/perfil" class="flex items-center gap-3 px-4 py-3 text-slate-300 hover:bg-slate-800/60 hover:text-white font-medium rounded-xl transition duration-200">
+                <i class="fa-solid fa-user w-5"></i>
+                <span>Meu Perfil</span>
+            </a>
+        </nav>
+
+        <div class="p-4 border-t border-slate-700/50">
+            <a href="/logout" class="flex items-center gap-3 px-4 py-2.5 text-red-400 hover:bg-red-500/10 hover:text-red-300 rounded-xl transition font-medium text-sm">
+                <i class="fa-solid fa-right-from-bracket"></i>
+                <span>Sair da conta</span>
+            </a>
+        </div>
+    </aside>
+
+    <div class="flex-1 flex flex-col h-full overflow-hidden print-root">
+
+        <header class="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between gap-3 shadow-sm z-10">
+            <div class="flex items-center gap-4">
+                <button onclick="toggleSidebar()" class="lg:hidden text-slate-600 hover:text-slate-900 focus:outline-none p-1 no-print" aria-label="Abrir menu">
+                    <i class="fa-solid fa-bars text-xl"></i>
+                </button>
+                <h1 class="text-2xl font-bold text-slate-800 tracking-tight">Relatórios</h1>
+            </div>
+            <div class="flex items-center gap-2 flex-wrap justify-end no-print">
+                <div class="flex items-center bg-slate-50 p-2 rounded-xl border border-slate-200">
+                    <i class="fa-solid fa-calendar-days text-slate-500 pl-2 pr-1"></i>
+                    <input type="month" id="filtro-mes" class="bg-transparent text-sm font-semibold text-slate-700 focus:outline-none cursor-pointer pr-2" />
+                </div>
+                <button onclick="exportarCSV()" class="px-3.5 py-2.5 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 text-sm font-semibold rounded-xl"><i class="fa-solid fa-file-csv mr-1.5 text-emerald-600"></i>CSV / Excel</button>
+                <button onclick="exportarPDF()" class="px-3.5 py-2.5 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 text-sm font-semibold rounded-xl"><i class="fa-solid fa-file-pdf mr-1.5 text-red-500"></i>PDF</button>
+            </div>
+        </header>
+
+        <main class="flex-1 overflow-y-auto p-4 md:p-6 bg-slate-100 print-main">
+            <div class="max-w-7xl mx-auto space-y-6">
+
+                <div id="erro" class="hidden p-3 text-sm rounded-xl border bg-red-50 text-red-700 border-red-200"></div>
+
+                <div id="sem-vinculo" class="hidden bg-white rounded-2xl p-10 shadow-sm border border-slate-200/80 text-center">
+                    <div class="w-14 h-14 mx-auto mb-4 rounded-2xl bg-slate-100 text-slate-400 flex items-center justify-center text-2xl"><i class="fa-solid fa-link"></i></div>
+                    <p class="font-bold text-slate-700">Telegram ainda não vinculado</p>
+                    <p class="text-sm text-slate-500 mt-1">Envie /login no Telegram para ver seus relatórios.</p>
+                </div>
+
+                <div id="conteudo" class="space-y-6">
+
+                    <!-- DRE -->
+                    <section class="bg-white rounded-2xl shadow-sm border border-slate-200/80 print-card">
+                        <div class="p-5 border-b border-slate-100">
+                            <h2 class="font-bold text-slate-800">Resumo do mês <span id="rotulo" class="text-slate-400 font-medium"></span></h2>
+                        </div>
+                        <div class="grid grid-cols-1 lg:grid-cols-2">
+                            <table class="w-full text-sm">
+                                <tbody id="dre-corpo" class="divide-y divide-slate-100"></tbody>
+                            </table>
+                            <div class="border-t lg:border-t-0 lg:border-l border-slate-100">
+                                <p class="px-5 pt-4 text-xs font-semibold text-slate-400">Despesas por categoria</p>
+                                <table class="w-full text-sm mt-1">
+                                    <tbody id="cat-corpo" class="divide-y divide-slate-100"></tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </section>
+
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        <section class="bg-white rounded-2xl p-5 shadow-sm border border-slate-200/80 print-card">
+                            <h2 class="font-bold text-slate-800">Mês a mês</h2>
+                            <p class="text-sm text-slate-500 mb-3">Receitas, despesas e saldo dos últimos 6 meses.</p>
+                            <div class="h-72"><canvas id="grafico-mensal"></canvas></div>
+                        </section>
+                        <section class="bg-white rounded-2xl p-5 shadow-sm border border-slate-200/80 print-card">
+                            <h2 class="font-bold text-slate-800">Poupança</h2>
+                            <p class="text-sm text-slate-500 mb-3">Quanto você guardou e sacou por mês, e o total acumulado.</p>
+                            <div class="h-72"><canvas id="grafico-poupanca"></canvas></div>
+                        </section>
+                    </div>
+
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        <section class="bg-white rounded-2xl p-5 shadow-sm border border-slate-200/80 print-card">
+                            <h2 class="font-bold text-slate-800">Vilões do orçamento</h2>
+                            <p class="text-sm text-slate-500 mb-3">Gastos variáveis que mais cresceram em relação ao mês anterior.</p>
+                            <div id="viloes" class="space-y-3"></div>
+                        </section>
+                        <section class="bg-white rounded-2xl p-5 shadow-sm border border-slate-200/80 print-card">
+                            <div class="flex items-start justify-between gap-3 mb-3">
+                                <div>
+                                    <h2 class="font-bold text-slate-800">Insights do mês</h2>
+                                    <p class="text-sm text-slate-500">Calculados a partir dos seus lançamentos.</p>
+                                </div>
+                                <button id="btn-ia" onclick="analisarIA()" class="no-print shrink-0 inline-flex items-center gap-2 px-3.5 py-2 bg-amber-50 hover:bg-amber-100 text-amber-700 text-sm font-semibold rounded-xl border border-amber-200">
+                                    <i class="fa-solid fa-wand-magic-sparkles"></i> Análise com IA
+                                </button>
+                            </div>
+                            <ul id="insights" class="space-y-2.5 text-sm"></ul>
+                            <div id="painel-ia" class="hidden mt-4 p-4 bg-amber-50/60 border border-amber-100 rounded-xl text-sm text-slate-700"></div>
+                        </section>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        function toggleSidebar() {
+            document.getElementById('sidebar').classList.toggle('-translate-x-full');
+            document.getElementById('sidebar-backdrop').classList.toggle('hidden');
+        }
+        const brl = (n) => Number(n || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+        const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+        function mesAtual() {
+            const d = new Date();
+            return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+        }
+        function textoIA(texto) {
+            const linhas = String(texto).split('\n').map(l => l.replace(/\*\*/g, '').replace(/^[-•*]\s*/, '').trim()).filter(Boolean);
+            return '<ul class="space-y-2">' + linhas.map(l => `<li class="flex gap-2"><i class="fa-solid fa-wand-magic-sparkles text-amber-500 text-sm mt-1 shrink-0"></i><span>${esc(l)}</span></li>`).join('') + '</ul>';
+        }
+
+        const elMes = document.getElementById('filtro-mes');
+        let mes = mesAtual();
+        elMes.value = mes;
+        let graficos = {};
+
+        elMes.addEventListener('change', () => {
+            mes = elMes.value || mesAtual();
+            document.getElementById('painel-ia').classList.add('hidden');
+            carregar();
+        });
+
+        function mostrarErro(msg) {
+            const el = document.getElementById('erro');
+            el.textContent = msg;
+            el.classList.toggle('hidden', !msg);
+        }
+
+        async function carregar() {
+            try {
+                mostrarErro('');
+                const res = await fetch('/api/relatorios?mes=' + encodeURIComponent(mes));
+                if (res.status === 401) { window.location.href = '/login'; return; }
+                const d = await res.json();
+                if (!res.ok) throw new Error(d.erro || 'Falha ao carregar');
+                const semVinculo = !d.vinculado;
+                document.getElementById('sem-vinculo').classList.toggle('hidden', !semVinculo);
+                document.getElementById('conteudo').classList.toggle('hidden', semVinculo);
+                if (!semVinculo) render(d);
+            } catch (e) {
+                mostrarErro('Não foi possível carregar o relatório. Recarregue a página.');
+            }
+        }
+
+        function linhaDRE(rotulo, valor, opts = {}) {
+            const cor = opts.cor || 'text-slate-800';
+            return `<tr class="${opts.destaque ? 'bg-slate-50' : ''}">
+                <td class="px-5 py-3 ${opts.sub ? 'pl-9 text-slate-500' : 'font-medium text-slate-700'}">${rotulo}</td>
+                <td class="px-5 py-3 text-right whitespace-nowrap ${opts.destaque ? 'font-extrabold' : 'font-semibold'} ${cor}">${valor}</td>
+            </tr>`;
+        }
+
+        function render(d) {
+            const r = d.dre;
+            document.getElementById('rotulo').textContent = '· ' + d.rotulo;
+            document.getElementById('dre-corpo').innerHTML =
+                linhaDRE('Total de receitas', brl(r.receitas), { cor: 'text-emerald-600' }) +
+                linhaDRE('Despesas fixas', brl(r.despesas_fixas), { sub: true }) +
+                linhaDRE('Despesas variáveis', brl(r.despesas_variaveis), { sub: true }) +
+                linhaDRE('Total de despesas', brl(r.despesas_total), { cor: 'text-red-500' }) +
+                linhaDRE('Saldo líquido', brl(r.saldo), { destaque: true, cor: r.saldo < 0 ? 'text-red-500' : 'text-slate-800' }) +
+                linhaDRE('Guardado na poupança (líquido)', brl(r.poupado), { sub: true }) +
+                linhaDRE('Taxa de poupança', r.taxa_poupanca === null ? 'Sem renda no mês' : r.taxa_poupanca.toLocaleString('pt-BR') + '% da renda', { destaque: true });
+
+            document.getElementById('cat-corpo').innerHTML = r.categorias.length ? r.categorias.map(c => `
+                <tr><td class="px-5 py-2.5 text-slate-700">${esc(c.categoria)} <span class="text-xs text-slate-400">${c.tipo === 'fixa' ? 'fixa' : 'variável'}</span></td>
+                <td class="px-5 py-2.5 text-right text-slate-500 whitespace-nowrap">${c.pct_despesas.toLocaleString('pt-BR')}%</td>
+                <td class="px-5 py-2.5 text-right font-semibold text-slate-800 whitespace-nowrap">${brl(c.valor)}</td></tr>`).join('')
+                : '<tr><td class="px-5 py-6 text-center text-slate-400">Nenhuma despesa neste mês.</td></tr>';
+
+            desenharGraficos(d.comparativo);
+
+            document.getElementById('viloes').innerHTML = d.viloes.length ? d.viloes.map(v => {
+                const max = d.viloes[0].aumento || 1;
+                return `<div>
+                    <div class="flex items-center justify-between text-sm">
+                        <span class="font-semibold text-slate-700">${esc(v.categoria)}</span>
+                        <span class="text-red-500 font-semibold">+ ${brl(v.aumento)}${v.pct !== null ? ' (' + Math.round(v.pct) + '%)' : ' (novo)'}</span>
+                    </div>
+                    <div class="w-full bg-slate-100 h-2 rounded-full overflow-hidden mt-1.5"><div class="bg-red-400 h-full rounded-full" style="width:${Math.max(8, v.aumento / max * 100)}%"></div></div>
+                    <p class="text-xs text-slate-400 mt-1">${brl(v.anterior)} no mês anterior para ${brl(v.atual)}</p>
+                </div>`;
+            }).join('') : '<p class="text-sm text-slate-400 py-4">Nenhum gasto variável cresceu em relação ao mês anterior.</p>';
+
+            const icones = { alerta: ['fa-triangle-exclamation', 'text-amber-500'], conquista: ['fa-circle-check', 'text-emerald-500'], info: ['fa-circle-info', 'text-slate-400'] };
+            document.getElementById('insights').innerHTML = d.insights.map(i => {
+                const [ic, cor] = icones[i.tipo] || icones.info;
+                return `<li class="flex gap-2.5"><i class="fa-solid ${ic} ${cor} mt-0.5"></i><span class="text-slate-700">${esc(i.texto)}</span></li>`;
+            }).join('');
+        }
+
+        function desenharGraficos(s) {
+            Object.values(graficos).forEach(g => g.destroy());
+            const fmtEixo = (v) => 'R$ ' + Number(v).toLocaleString('pt-BR');
+            const tooltip = { callbacks: { label: (c) => ' ' + c.dataset.label + ': ' + brl(c.parsed.y) } };
+
+            graficos.mensal = new Chart(document.getElementById('grafico-mensal'), {
+                type: 'bar',
+                data: { labels: s.labels, datasets: [
+                    { label: 'Receitas', data: s.receitas, backgroundColor: '#10b981', borderRadius: 6 },
+                    { label: 'Despesas', data: s.despesas, backgroundColor: '#ef4444', borderRadius: 6 },
+                    { type: 'line', label: 'Saldo', data: s.saldo, borderColor: '#3b82f6', backgroundColor: '#3b82f6', tension: 0.3, pointRadius: 4 },
+                ] },
+                options: { responsive: true, maintainAspectRatio: false, plugins: { tooltip }, scales: { y: { ticks: { callback: fmtEixo }, grid: { color: '#f1f5f9' } }, x: { grid: { display: false } } } }
+            });
+
+            graficos.poupanca = new Chart(document.getElementById('grafico-poupanca'), {
+                type: 'bar',
+                data: { labels: s.labels, datasets: [
+                    { label: 'Guardado', data: s.depositos, backgroundColor: '#10b981', borderRadius: 6 },
+                    { label: 'Sacado', data: s.saques, backgroundColor: '#f59e0b', borderRadius: 6 },
+                    { type: 'line', label: 'Total acumulado', data: s.poupanca_acumulada, borderColor: '#3b82f6', backgroundColor: '#3b82f6', tension: 0.3, pointRadius: 4 },
+                ] },
+                options: { responsive: true, maintainAspectRatio: false, plugins: { tooltip }, scales: { y: { ticks: { callback: fmtEixo }, grid: { color: '#f1f5f9' } }, x: { grid: { display: false } } } }
+            });
+        }
+
+        function exportarCSV() {
+            window.location.href = '/api/relatorios/exportar.csv?mes=' + encodeURIComponent(mes);
+        }
+        function exportarPDF() {
+            const titulo = document.title;
+            document.title = 'fincash-relatorio-' + mes;
+            window.print();
+            document.title = titulo;
+        }
+
+        async function analisarIA() {
+            const painel = document.getElementById('painel-ia');
+            const btn = document.getElementById('btn-ia');
+            painel.classList.remove('hidden');
+            painel.textContent = 'Analisando seu mês...';
+            btn.disabled = true;
+            try {
+                const res = await fetch('/api/relatorios/analise-ia', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mes }) });
+                const d = await res.json().catch(() => ({}));
+                painel.innerHTML = res.ok ? textoIA(d.texto) : '<span class="text-red-600">' + esc(d.erro || 'Não foi possível gerar a análise.') + '</span>';
+            } catch (e) {
+                painel.innerHTML = '<span class="text-red-600">Erro de conexão. Tente de novo.</span>';
+            } finally { btn.disabled = false; }
+        }
+
+        carregar();
+    </script>
+</body>
+</html>

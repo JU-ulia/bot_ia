@@ -99,6 +99,19 @@ async function carregarDadosDashboard(usuarioId, mesFiltro = null) {
             elPoupanca.textContent = `R$ ${poupancaVal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
         }
 
+        // Meta de poupança (definida em Orçamentos)
+        const elMeta = document.getElementById('meta-poupanca-texto');
+        if (elMeta && dados.totais) {
+            const meta = dados.totais.meta_poupanca || 0;
+            if (meta > 0) {
+                const pct = Math.min(100, ((dados.totais.poupanca || 0) / meta) * 100);
+                elMeta.textContent = `Meta: R$ ${meta.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} (${pct.toFixed(0)}%)`;
+                elMeta.classList.remove('hidden');
+            } else {
+                elMeta.classList.add('hidden');
+            }
+        }
+
         // 3. Atualiza Gráfico de Orçamento Geral (Donut)
         if (budgetChartInstance && dados.totais) {
             if (!possuiDados) {
@@ -106,13 +119,15 @@ async function carregarDadosDashboard(usuarioId, mesFiltro = null) {
                 budgetChartInstance.data.datasets[0].data = [1];
                 budgetChartInstance.data.datasets[0].backgroundColor = ['#cbd5e1'];
             } else {
-                budgetChartInstance.data.labels = ['Receita Mensal', 'Despesas Totais', 'Saldo Atual'];
+                budgetChartInstance.data.labels = ['Receita Mensal', 'Despesas Totais', 'Poupança', 'Saldo Atual'];
                 budgetChartInstance.data.datasets[0].data = [
                     dados.totais.renda || 0,
                     dados.totais.despesa || 0,
+                    // poupança líquida do período (depósitos - saques); fatia não pode ser negativa
+                    Math.max(dados.totais.poupanca_liquida || 0, 0),
                     dados.totais.saldo > 0 ? dados.totais.saldo : 0
                 ];
-                budgetChartInstance.data.datasets[0].backgroundColor = ['#3b82f6', '#a855f7', '#f97316'];
+                budgetChartInstance.data.datasets[0].backgroundColor = ['#3b82f6', '#a855f7', '#10b981', '#f97316'];
             }
             budgetChartInstance.update();
         }
@@ -283,8 +298,8 @@ function initBudgetChart() {
     budgetChartInstance = new Chart(canvas.getContext('2d'), {
         type: 'doughnut',
         data: {
-            labels: ['Receita Mensal', 'Despesas Totais', 'Saldo Atual'],
-            datasets: [{ data: [0, 0, 0], backgroundColor: ['#3b82f6', '#a855f7', '#f97316'] }]
+            labels: ['Receita Mensal', 'Despesas Totais', 'Poupança', 'Saldo Atual'],
+            datasets: [{ data: [0, 0, 0, 0], backgroundColor: ['#3b82f6', '#a855f7', '#10b981', '#f97316'] }]
         },
         options: { responsive: true, maintainAspectRatio: false }
     });

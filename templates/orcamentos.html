@@ -1,0 +1,348 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>fincash - Orçamentos</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = { theme: { extend: { colors: { 'brand-sidebar': '#0f172a', 'brand-active': '#1e293b' } } } }
+    </script>
+    
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        @media print {
+            #sidebar, #sidebar-backdrop, .no-print { display: none !important; }
+            body { display: block !important; height: auto !important; overflow: visible !important; background: #fff !important; }
+            .print-root, .print-main { overflow: visible !important; height: auto !important; }
+            .print-card { break-inside: avoid; box-shadow: none !important; }
+        }
+    </style>
+</head>
+<body class="bg-slate-100 text-slate-800 antialiased flex h-screen overflow-hidden">
+
+    <div id="sidebar-backdrop" onclick="toggleSidebar()" class="fixed inset-0 bg-slate-900/50 z-20 hidden lg:hidden transition-opacity"></div>
+
+    <aside id="sidebar" class="fixed lg:static inset-y-0 left-0 z-30 w-64 bg-brand-sidebar text-white flex flex-col transform -translate-x-full lg:translate-x-0 transition-transform duration-300 ease-in-out shadow-xl">
+        <div class="p-6 flex items-center gap-3 border-b border-slate-700/50">
+            <div class="bg-blue-600 p-2 rounded-lg text-white flex items-center justify-center shadow-lg">
+                <i class="fa-solid fa-chart-line text-xl"></i>
+            </div>
+            <span class="text-2xl font-extrabold tracking-tight text-white">fincash</span>
+        </div>
+
+        <nav class="flex-1 px-4 py-6 space-y-2 overflow-y-auto">
+            <a href="/" class="flex items-center gap-3 px-4 py-3 text-slate-300 hover:bg-slate-800/60 hover:text-white font-medium rounded-xl transition duration-200">
+                <i class="fa-solid fa-square-poll-vertical w-5"></i>
+                <span>Visão Geral</span>
+            </a>
+            <a href="/transacoes" class="flex items-center gap-3 px-4 py-3 text-slate-300 hover:bg-slate-800/60 hover:text-white font-medium rounded-xl transition duration-200">
+                <i class="fa-solid fa-arrow-right-arrow-left w-5"></i>
+                <span>Transações</span>
+            </a>
+            <a href="/orcamentos" class="flex items-center gap-3 px-4 py-3 bg-brand-active text-white font-medium rounded-xl transition duration-200 shadow-sm border-l-4 border-blue-500">
+                <i class="fa-solid fa-wallet w-5 text-blue-400"></i>
+                <span>Orçamentos</span>
+            </a>
+            <a href="/relatorios" class="flex items-center gap-3 px-4 py-3 text-slate-300 hover:bg-slate-800/60 hover:text-white font-medium rounded-xl transition duration-200">
+                <i class="fa-solid fa-chart-pie w-5"></i>
+                <span>Relatórios</span>
+            </a>
+            <a href="/perfil" class="flex items-center gap-3 px-4 py-3 text-slate-300 hover:bg-slate-800/60 hover:text-white font-medium rounded-xl transition duration-200">
+                <i class="fa-solid fa-user w-5"></i>
+                <span>Meu Perfil</span>
+            </a>
+        </nav>
+
+        <div class="p-4 border-t border-slate-700/50">
+            <a href="/logout" class="flex items-center gap-3 px-4 py-2.5 text-red-400 hover:bg-red-500/10 hover:text-red-300 rounded-xl transition font-medium text-sm">
+                <i class="fa-solid fa-right-from-bracket"></i>
+                <span>Sair da conta</span>
+            </a>
+        </div>
+    </aside>
+
+    <div class="flex-1 flex flex-col h-full overflow-hidden print-root">
+
+        <header class="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between shadow-sm z-10">
+            <div class="flex items-center gap-4">
+                <button onclick="toggleSidebar()" class="lg:hidden text-slate-600 hover:text-slate-900 focus:outline-none p-1" aria-label="Abrir menu">
+                    <i class="fa-solid fa-bars text-xl"></i>
+                </button>
+                <h1 class="text-2xl font-bold text-slate-800 tracking-tight">Orçamentos</h1>
+            </div>
+            <div class="flex items-center bg-slate-50 p-2 rounded-xl border border-slate-200">
+                <i class="fa-solid fa-calendar-days text-slate-500 pl-2 pr-1"></i>
+                <input type="month" id="filtro-mes" class="bg-transparent text-sm font-semibold text-slate-700 focus:outline-none cursor-pointer pr-2" />
+            </div>
+        </header>
+
+        <main class="flex-1 overflow-y-auto p-4 md:p-6 bg-slate-100 print-main">
+            <div class="max-w-7xl mx-auto space-y-6">
+
+                <div id="aviso" class="hidden p-3 text-sm rounded-xl border"></div>
+
+                <div id="sem-vinculo" class="hidden bg-white rounded-2xl p-10 shadow-sm border border-slate-200/80 text-center">
+                    <div class="w-14 h-14 mx-auto mb-4 rounded-2xl bg-slate-100 text-slate-400 flex items-center justify-center text-2xl"><i class="fa-solid fa-link"></i></div>
+                    <p class="font-bold text-slate-700">Telegram ainda não vinculado</p>
+                    <p class="text-sm text-slate-500 mt-1">Envie /login no Telegram para definir limites e metas.</p>
+                </div>
+
+                <div id="conteudo" class="space-y-6">
+
+                    <!-- Meta de poupança -->
+                    <section class="bg-white rounded-2xl p-5 shadow-sm border border-slate-200/80">
+                        <div class="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
+                            <div class="flex items-center gap-4">
+                                <div class="w-12 h-12 rounded-xl bg-emerald-100 text-emerald-600 flex items-center justify-center text-xl"><i class="fa-solid fa-piggy-bank"></i></div>
+                                <div>
+                                    <span class="text-xs font-semibold text-slate-400">Total guardado</span>
+                                    <p class="text-2xl font-extrabold text-slate-800" id="poup-total">R$ 0,00</p>
+                                    <p class="text-sm text-slate-500" id="poup-meta-texto"></p>
+                                </div>
+                            </div>
+                            <div class="md:text-right">
+                                <button id="btn-meta" class="text-sm font-semibold text-blue-600 hover:text-blue-500">Definir meta</button>
+                                <form id="form-meta" class="hidden flex items-center gap-2 mt-1" onsubmit="salvarMeta(event)">
+                                    <input id="meta-valor" inputmode="decimal" placeholder="Ex.: 10.000,00" class="w-40 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:border-blue-500">
+                                    <button class="px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold rounded-xl">Salvar meta</button>
+                                </form>
+                            </div>
+                        </div>
+                        <div id="poup-barra-wrap" class="hidden mt-4">
+                            <div class="w-full bg-slate-100 h-3 rounded-full overflow-hidden"><div id="poup-barra" class="bg-emerald-500 h-full rounded-full transition-all duration-500" style="width:0%"></div></div>
+                            <p class="text-xs text-slate-500 mt-1.5" id="poup-falta"></p>
+                        </div>
+                        <div class="mt-4 pt-4 border-t border-slate-100">
+                            <p class="text-xs font-semibold text-slate-400 mb-2">Últimas movimentações</p>
+                            <div id="poup-movs" class="divide-y divide-slate-100 text-sm"></div>
+                            <p class="text-xs text-slate-400 mt-3">Para guardar ou sacar, use o Telegram: <span class="font-medium text-slate-500">guardar 200</span> ou <span class="font-medium text-slate-500">sacar 100 da poupança</span>.</p>
+                        </div>
+                    </section>
+
+                    <!-- Limites -->
+                    <section class="bg-white rounded-2xl p-5 shadow-sm border border-slate-200/80">
+                        <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-4">
+                            <div>
+                                <h2 class="font-bold text-slate-800">Limites do mês</h2>
+                                <p class="text-sm text-slate-500" id="resumo-limites"></p>
+                            </div>
+                            <button id="btn-ia" onclick="analisarIA()" class="self-start md:self-auto inline-flex items-center gap-2 px-4 py-2 bg-amber-50 hover:bg-amber-100 text-amber-700 text-sm font-semibold rounded-xl border border-amber-200">
+                                <i class="fa-solid fa-wand-magic-sparkles"></i> Analisar com IA
+                            </button>
+                        </div>
+
+                        <form class="grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto] gap-3 mb-5" onsubmit="salvarLimite(event)">
+                            <select id="cat-select" class="px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:border-blue-500" required></select>
+                            <input id="limite-valor" inputmode="decimal" placeholder="Teto mensal, ex.: 800,00" required class="px-3 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:border-blue-500">
+                            <button class="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white text-sm font-semibold rounded-xl">Salvar limite</button>
+                        </form>
+
+                        <div id="painel-ia" class="hidden mb-5 p-4 bg-amber-50/60 border border-amber-100 rounded-xl text-sm text-slate-700"></div>
+
+                        <div id="lista-orcamentos" class="grid grid-cols-1 md:grid-cols-2 gap-4"></div>
+
+                        <div id="vazio" class="hidden text-center py-10">
+                            <div class="w-14 h-14 mx-auto mb-4 rounded-2xl bg-slate-100 text-slate-400 flex items-center justify-center text-2xl"><i class="fa-solid fa-wallet"></i></div>
+                            <p class="font-bold text-slate-700">Nenhum limite definido</p>
+                            <p class="text-sm text-slate-500 mt-1">Escolha uma categoria e defina um teto mensal para acompanhar seus gastos.</p>
+                        </div>
+
+                        <div id="sem-limite-wrap" class="hidden mt-5 pt-4 border-t border-slate-100">
+                            <p class="text-xs font-semibold text-slate-400 mb-2">Gastos neste mês em categorias sem limite</p>
+                            <div id="sem-limite" class="flex flex-wrap gap-2"></div>
+                        </div>
+                    </section>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        function toggleSidebar() {
+            document.getElementById('sidebar').classList.toggle('-translate-x-full');
+            document.getElementById('sidebar-backdrop').classList.toggle('hidden');
+        }
+        const brl = (n) => Number(n || 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+        const esc = (s) => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+        function mesAtual() {
+            const d = new Date();
+            return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+        }
+        function textoIA(texto) {
+            const linhas = String(texto).split('\n').map(l => l.replace(/\*\*/g, '').replace(/^[-•*]\s*/, '').trim()).filter(Boolean);
+            return '<ul class="space-y-2">' + linhas.map(l => `<li class="flex gap-2"><i class="fa-solid fa-wand-magic-sparkles text-amber-500 text-sm mt-1 shrink-0"></i><span>${esc(l)}</span></li>`).join('') + '</ul>';
+        }
+
+        const CORES = {
+            ok:      { barra: 'bg-emerald-500', texto: 'text-emerald-600', chip: 'bg-emerald-50 border-emerald-100', rotulo: 'Dentro do limite' },
+            alerta:  { barra: 'bg-amber-500',   texto: 'text-amber-600',   chip: 'bg-amber-50 border-amber-100',     rotulo: 'Atenção' },
+            critico: { barra: 'bg-red-500',     texto: 'text-red-600',     chip: 'bg-red-50 border-red-100',         rotulo: 'Limite crítico' },
+        };
+        function parseBRL(s) {
+            let t = String(s).replace(/[^\d.,]/g, '').replace(/^[.,]+|[.,]+$/g, '');
+            if (!t) return null;
+            if (t.includes(',') && t.includes('.')) t = t.replace(/\./g, '').replace(',', '.');
+            else if (t.includes(',')) t = t.replace(',', '.');
+            else if (/^\d{1,3}(\.\d{3})+$/.test(t)) t = t.replace(/\./g, '');
+            const v = parseFloat(t);
+            return isFinite(v) && v > 0 ? v : null;
+        }
+
+        const elMes = document.getElementById('filtro-mes');
+        let mes = mesAtual();
+        elMes.value = mes;
+        elMes.addEventListener('change', () => { mes = elMes.value || mesAtual(); document.getElementById('painel-ia').classList.add('hidden'); carregar(); });
+
+        function aviso(msg, erro) {
+            const el = document.getElementById('aviso');
+            el.className = 'p-3 text-sm rounded-xl border ' + (erro ? 'bg-red-50 text-red-700 border-red-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200');
+            el.textContent = msg;
+            el.classList.remove('hidden');
+            clearTimeout(aviso._t);
+            aviso._t = setTimeout(() => el.classList.add('hidden'), 4000);
+        }
+
+        async function carregar() {
+            try {
+                const res = await fetch('/api/orcamentos?mes=' + encodeURIComponent(mes));
+                if (res.status === 401) { window.location.href = '/login'; return; }
+                const d = await res.json();
+                if (!res.ok) throw new Error(d.erro || 'Falha ao carregar');
+                const semVinculo = !d.vinculado;
+                document.getElementById('sem-vinculo').classList.toggle('hidden', !semVinculo);
+                document.getElementById('conteudo').classList.toggle('hidden', semVinculo);
+                if (!semVinculo) render(d);
+            } catch (e) {
+                aviso('Não foi possível carregar os orçamentos. Recarregue a página.', true);
+            }
+        }
+
+        function render(d) {
+            // Poupança
+            const p = d.poupanca;
+            document.getElementById('poup-total').textContent = brl(p.total);
+            const wrap = document.getElementById('poup-barra-wrap');
+            if (p.meta) {
+                wrap.classList.remove('hidden');
+                document.getElementById('poup-meta-texto').textContent = 'Meta: ' + brl(p.meta) + ' (' + Math.round(p.percentual) + '%)';
+                document.getElementById('poup-barra').style.width = p.percentual + '%';
+                const falta = p.meta - p.total;
+                document.getElementById('poup-falta').textContent = falta > 0 ? 'Faltam ' + brl(falta) + ' para a meta.' : 'Meta atingida!';
+                document.getElementById('btn-meta').textContent = 'Alterar meta';
+            } else {
+                wrap.classList.add('hidden');
+                document.getElementById('poup-meta-texto').textContent = 'Sem meta definida';
+                document.getElementById('btn-meta').textContent = 'Definir meta';
+            }
+            document.getElementById('poup-movs').innerHTML = p.movimentos.length ? p.movimentos.map(m => {
+                const dep = m.tipo === 'deposito';
+                return `<div class="py-2 flex items-center justify-between gap-3">
+                    <div class="flex items-center gap-3 min-w-0">
+                        <span class="w-8 h-8 shrink-0 rounded-lg flex items-center justify-center ${dep ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-500'}"><i class="fa-solid ${dep ? 'fa-arrow-down' : 'fa-arrow-up'} text-xs"></i></span>
+                        <div class="min-w-0"><p class="font-medium text-slate-700 truncate">${dep ? 'Guardado' : 'Retirado'}${m.descricao ? ' · ' + esc(m.descricao) : ''}</p><p class="text-xs text-slate-400">${esc(m.data_fmt)}</p></div>
+                    </div>
+                    <span class="font-bold whitespace-nowrap ${dep ? 'text-emerald-600' : 'text-red-500'}">${dep ? '+' : '-'} ${brl(m.valor)}</span>
+                </div>`;
+            }).join('') : '<p class="text-slate-400 py-1">Nenhuma movimentação ainda.</p>';
+
+            // Select de categorias
+            const sel = document.getElementById('cat-select');
+            const atual = sel.value;
+            sel.innerHTML = '<option value="" disabled>Categoria</option>' + d.categorias_disponiveis.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
+            sel.value = atual || '';
+            if (!sel.value) sel.selectedIndex = 0;
+
+            // Limites
+            document.getElementById('resumo-limites').textContent = d.orcamentos.length
+                ? brl(d.totais.gasto) + ' gastos de ' + brl(d.totais.limite) + ' planejados (' + Math.round(d.totais.percentual) + '%)'
+                : '';
+            document.getElementById('vazio').classList.toggle('hidden', d.orcamentos.length > 0);
+            document.getElementById('btn-ia').classList.toggle('hidden', d.orcamentos.length === 0);
+            document.getElementById('lista-orcamentos').innerHTML = d.orcamentos.map(o => {
+                const c = CORES[o.status];
+                const largura = Math.min(o.percentual, 100);
+                return `<div class="border border-slate-200 rounded-2xl p-4">
+                    <div class="flex items-start justify-between gap-3">
+                        <div>
+                            <p class="font-bold text-slate-800">${esc(o.categoria)}</p>
+                            <p class="text-sm text-slate-500 mt-0.5"><span class="font-semibold ${c.texto}">${brl(o.gasto)}</span> / ${brl(o.limite)}</p>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <span class="px-2.5 py-1 rounded-lg border text-xs font-semibold ${c.chip} ${c.texto}">${Math.round(o.percentual)}% · ${c.rotulo}</span>
+                            <button onclick="excluirLimite(${o.id}, '${esc(o.categoria)}')" class="text-slate-400 hover:text-red-500 p-1" aria-label="Remover limite de ${esc(o.categoria)}"><i class="fa-solid fa-trash-can text-sm"></i></button>
+                        </div>
+                    </div>
+                    <div class="w-full bg-slate-100 h-2.5 rounded-full overflow-hidden mt-3"><div class="${c.barra} h-full rounded-full transition-all duration-500" style="width:${largura}%"></div></div>
+                    ${o.mensagem ? `<p class="text-xs text-slate-500 mt-2.5 flex gap-1.5"><i class="fa-solid fa-chart-line mt-0.5 text-slate-400"></i><span>${esc(o.mensagem)}</span></p>` : ''}
+                </div>`;
+            }).join('');
+
+            const sl = document.getElementById('sem-limite');
+            document.getElementById('sem-limite-wrap').classList.toggle('hidden', d.sem_limite.length === 0);
+            sl.innerHTML = d.sem_limite.map(s => `<span class="px-3 py-1.5 rounded-lg bg-slate-100 text-slate-600 text-xs font-medium">${esc(s.categoria)}: ${brl(s.gasto)}</span>`).join('');
+        }
+
+        async function salvarLimite(ev) {
+            ev.preventDefault();
+            const categoria = document.getElementById('cat-select').value;
+            const limite = parseBRL(document.getElementById('limite-valor').value);
+            if (!categoria) return aviso('Escolha uma categoria.', true);
+            if (!limite) return aviso('Informe um limite maior que zero, por exemplo 800,00.', true);
+            const res = await fetch('/api/orcamentos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ categoria, limite }) });
+            const d = await res.json().catch(() => ({}));
+            if (!res.ok) return aviso(d.erro || 'Não foi possível salvar o limite.', true);
+            document.getElementById('limite-valor').value = '';
+            aviso('Limite de ' + categoria + ' salvo.');
+            carregar();
+        }
+
+        async function excluirLimite(id, categoria) {
+            if (!confirm('Tem certeza que deseja excluir o limite de ' + categoria + '?\n\nSerá apagado só o limite mensal. Seus lançamentos não serão afetados.\n\nDepois de confirmar, a ação não poderá mais ser desfeita. Para mais informações, entre em contato com o SAC: aaa@aaa')) return;
+            const res = await fetch('/api/orcamentos/' + id, { method: 'DELETE' });
+            const d = await res.json().catch(() => ({}));
+            if (!res.ok) return aviso(d.erro || 'Não foi possível remover o limite.', true);
+            aviso('Limite removido.');
+            carregar();
+        }
+
+        document.getElementById('btn-meta').addEventListener('click', () => {
+            document.getElementById('form-meta').classList.toggle('hidden');
+            document.getElementById('meta-valor').focus();
+        });
+        async function salvarMeta(ev) {
+            ev.preventDefault();
+            const bruto = document.getElementById('meta-valor').value.trim();
+            const valor = bruto === '0' ? 0 : parseBRL(bruto);
+            if (valor === null) return aviso('Informe um valor válido para a meta (ou 0 para remover).', true);
+            if (valor === 0 && !confirm('Tem certeza que deseja remover sua meta de poupança?\n\nSerá apagada só a meta. O dinheiro guardado não muda.\n\nDepois de confirmar, a ação não poderá mais ser desfeita. Para mais informações, entre em contato com o SAC: aaa@aaa')) return;
+            const res = await fetch('/api/meta-poupanca', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ valor }) });
+            const d = await res.json().catch(() => ({}));
+            if (!res.ok) return aviso(d.erro || 'Não foi possível salvar a meta.', true);
+            document.getElementById('form-meta').classList.add('hidden');
+            document.getElementById('meta-valor').value = '';
+            aviso(valor ? 'Meta salva.' : 'Meta removida.');
+            carregar();
+        }
+
+        async function analisarIA() {
+            const painel = document.getElementById('painel-ia');
+            const btn = document.getElementById('btn-ia');
+            painel.classList.remove('hidden');
+            painel.textContent = 'Analisando seus limites...';
+            btn.disabled = true;
+            try {
+                const res = await fetch('/api/orcamentos/analise-ia', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mes }) });
+                const d = await res.json().catch(() => ({}));
+                painel.innerHTML = res.ok ? textoIA(d.texto) : '<span class="text-red-600">' + esc(d.erro || 'Não foi possível gerar a análise.') + '</span>';
+            } catch (e) {
+                painel.innerHTML = '<span class="text-red-600">Erro de conexão. Tente de novo.</span>';
+            } finally { btn.disabled = false; }
+        }
+
+        carregar();
+    </script>
+</body>
+</html>

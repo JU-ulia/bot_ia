@@ -37,10 +37,10 @@
         <!-- FORMULÁRIO DE LOGIN -->
         <form id="form-login" onsubmit="handleLogin(event)" class="space-y-4">
             <div>
-                <label class="block text-xs font-semibold uppercase text-slate-400 mb-1">Telegram ID ou E-mail</label>
+                <label class="block text-xs font-semibold uppercase text-slate-400 mb-1">Telefone ou E-mail</label>
                 <div class="relative">
                     <i class="fa-solid fa-user absolute left-3.5 top-3.5 text-slate-500"></i>
-                    <input type="text" id="login-identifier" required placeholder="Seu ID do Telegram ou e-mail" class="w-full pl-10 pr-4 py-2.5 bg-slate-900 border border-slate-700 rounded-xl focus:outline-none focus:border-blue-500 text-white placeholder-slate-500">
+                    <input type="text" id="login-identifier" required placeholder="(11) 99999-9999 ou seu@email.com" class="w-full pl-10 pr-4 py-2.5 bg-slate-900 border border-slate-700 rounded-xl focus:outline-none focus:border-blue-500 text-white placeholder-slate-500">
                 </div>
             </div>
 
@@ -153,7 +153,7 @@ async function handleLogin(e) {
 
     // 1. Validação básica de campo vazio no login
     if (!identifier || !password) {
-        showAlert('Preencha o usuário/e-mail e a senha!', true);
+        showAlert('Preencha o telefone ou e-mail e a senha!', true);
         return;
     }
 
@@ -170,7 +170,7 @@ async function handleLogin(e) {
             window.location.href = '/'; // Login correto -> Redireciona
         } else {
             // 🛑 Exibe mensagem quando a senha ou e-mail/usuário estiverem errados
-            showAlert(data.erro || 'E-mail, usuário ou senha incorretos!', true);
+            showAlert(data.erro || 'Telefone, e-mail ou senha incorretos!', true);
         }
     } catch (err) {
         showAlert('Erro de conexão com o servidor', true);

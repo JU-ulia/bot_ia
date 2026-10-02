@@ -1,5 +1,9 @@
 # Configurações do VS Code
 .vscode/
+<<<<<<< HEAD
+=======
+git status
+>>>>>>> 4206ee7 (Criação de orcamentos,perfil,relatorios,transacoes em html e alguns itens de categorias)
 
 # Ambiente Virtual do Python
 venv/
@@ -10,4 +14,11 @@ __pycache__/
 *.pyc
 
 # Arquivo de variáveis de ambiente (chaves de API, senhas, etc.)
+<<<<<<< HEAD
 .env
+=======
+.env
+
+# Arquivo de configuração do Live Share
+.vsls.json
+>>>>>>> 4206ee7 (Criação de orcamentos,perfil,relatorios,transacoes em html e alguns itens de categorias)

@@ -27,6 +27,11 @@ import time
 import imaplib
 from email import message_from_bytes
 from datetime import datetime, timedelta
+import calendar
+import math
+import csv
+import io
+import unicodedata
 
 # Carrega as variáveis de ambiente (.env)
 load_dotenv()
@@ -253,6 +258,12 @@ def criar_tabelas():
         );
         """)
 
+        # Categorias personalizadas: cada uma é de 'despesa' ou de 'renda'
+        cursor.execute("""
+            ALTER TABLE categories
+            ADD COLUMN IF NOT EXISTS tipo VARCHAR(10) NOT NULL DEFAULT 'despesa';
+        """)
+
         # 4. TABELA DE AUDITORIA E HISTÓRICO DE DADOS MANIPULADOS
         cursor.execute("""
         CREATE TABLE IF NOT EXISTS dados_salvos (
@@ -295,6 +306,42 @@ def criar_tabelas():
         cursor.execute("""
             ALTER TABLE users
             ADD COLUMN IF NOT EXISTS email_invalido BOOLEAN DEFAULT FALSE;
+        """)
+
+        # Poupança: cada depósito/saque é um movimento (o total guardado é a soma)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS savings_movements (
+            id SERIAL PRIMARY KEY,
+            telegram_id TEXT NOT NULL,
+            tipo VARCHAR(10) NOT NULL CHECK (tipo IN ('deposito', 'saque')),
+            valor NUMERIC(12, 2) NOT NULL CHECK (valor > 0),
+            descricao TEXT,
+            data TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """)
+        cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_savings_movements_tg
+        ON savings_movements(telegram_id, data);
+        """)
+
+        # Orçamento mensal por categoria (um limite por categoria e usuário)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS budgets (
+            id SERIAL PRIMARY KEY,
+            telegram_id TEXT NOT NULL,
+            categoria VARCHAR(50) NOT NULL,
+            limite NUMERIC(12, 2) NOT NULL CHECK (limite > 0),
+            UNIQUE (telegram_id, categoria)
+        );
+        """)
+
+        # Meta de poupança (uma por usuário)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS savings_goals (
+            telegram_id TEXT PRIMARY KEY,
+            valor_meta NUMERIC(12, 2) NOT NULL CHECK (valor_meta > 0),
+            atualizado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
         """)
 
         conexao.commit()
@@ -362,6 +409,682 @@ def index():
     return render_template('main.html')
 
 # 2. Rota Login Page
+# Página de Transações (histórico de entradas e saídas)
+@app_web.route('/transacoes')
+def transacoes_page():
+    if 'telegram_id' not in session and 'user_id' not in session:
+        return redirect(url_for('login_page'))
+    return render_template('transacoes.html')
+
+# API: lista de transações do usuário logado
+@app_web.route('/api/transacoes', methods=['GET'])
+def api_transacoes():
+    if 'telegram_id' not in session and 'user_id' not in session:
+        return jsonify({"erro": "Não autenticado"}), 401
+
+    telegram_id = obter_telegram_id_atual()
+    if not telegram_id:
+        return jsonify({"vinculado": False, "transacoes": []})
+
+    mes = request.args.get('mes')  # formato YYYY-MM (opcional)
+    if mes and not re.fullmatch(r'\d{4}-\d{2}', mes):
+        return jsonify({"erro": "Mês inválido"}), 400
+
+    conexao = obter_conexao()
+    try:
+        with conexao.cursor() as cursor:
+            query = """
+                SELECT id, tipo, valor, categoria, descricao,
+                       TO_CHAR(data, 'DD/MM/YYYY HH24:MI')
+                FROM transactions
+                WHERE TRIM(telegram_id) = %s
+            """
+            params = [telegram_id]
+            if mes:
+                query += " AND TO_CHAR(data, 'YYYY-MM') = %s"
+                params.append(mes)
+            query += " ORDER BY data DESC NULLS LAST, id DESC LIMIT 1000;"
+            cursor.execute(query, params)
+            linhas = cursor.fetchall()
+    finally:
+        conexao.close()
+
+    return jsonify({
+        "vinculado": True,
+        "transacoes": [
+            {"id": r[0], "tipo": r[1], "valor": float(r[2]), "categoria": r[3],
+             "descricao": r[4], "data_fmt": r[5] or ""}
+            for r in linhas
+        ]
+    })
+
+# ==========================================
+# ORÇAMENTOS, POUPANÇA E RELATÓRIOS
+# ==========================================
+from flask import Response
+
+CATEGORIAS_DESPESA = ["Alimentação", "Carro", "Internet", "Moradia", "Lazer", "Outros"]
+# Despesas FIXAS (todas as outras contam como variáveis no relatório). Ajuste ao seu uso.
+CATEGORIAS_FIXAS = {"moradia", "internet"}
+MESES_ABREV = ["jan", "fev", "mar", "abr", "mai", "jun", "jul", "ago", "set", "out", "nov", "dez"]
+
+# Mensagens do Telegram para guardar / sacar / consultar a poupança
+_DEST_POUP = r'(?:poupan[çc]a|reserva)'
+PADRAO_POUPAR = re.compile(
+    r'^(?:guardar|guardei|poupar|poupei|reservar|reservei)\s+(?:r\$\s*)?(\d[\d.,]*)(?:\s*reais)?'
+    r'(?:\s+(?:na|a|para a|pra)\s+(?:minha\s+)?' + _DEST_POUP + r')?\s*(.*)$')
+PADRAO_DEPOSITAR = re.compile(
+    r'^(?:depositar|depositei|colocar|coloquei|adicionar|adicionei|aplicar|apliquei)\s+(?:r\$\s*)?(\d[\d.,]*)(?:\s*reais)?'
+    r'\s+(?:na|a|para a|pra|em)\s+(?:minha\s+)?' + _DEST_POUP + r'\s*(.*)$')
+PADRAO_SACAR = re.compile(
+    r'^(?:sacar|saquei|retirar|retirei|resgatar|resgatei|tirar|tirei)\s+(?:r\$\s*)?(\d[\d.,]*)(?:\s*reais)?'
+    r'\s+(?:da|de|na)\s+(?:minha\s+)?' + _DEST_POUP + r'\s*(.*)$')
+PADRAO_VER_POUPANCA = re.compile(
+    r'^(?:/poupanca|minha poupan[çc]a|saldo (?:da |na )?poupan[çc]a|'
+    r'quanto (?:eu )?(?:tenho|guardei) (?:na|de|em) (?:minha )?poupan[çc]a)\??$')
+
+
+def fmt_brl(valor) -> str:
+    texto = f"{float(valor):,.2f}"
+    return "R$ " + texto.replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def parse_valor_br(texto):
+    """'1.500,50' / '1500.50' / '200' -> float com 2 casas, ou None se inválido."""
+    if texto is None:
+        return None
+    t = re.sub(r'[^\d.,]', '', str(texto)).strip('.,')
+    if not t:
+        return None
+    if ',' in t and '.' in t:
+        t = t.replace('.', '').replace(',', '.')
+    elif ',' in t:
+        t = t.replace(',', '.')
+    elif '.' in t and re.fullmatch(r'\d{1,3}(\.\d{3})+', t):
+        t = t.replace('.', '')
+    try:
+        v = round(float(t), 2)
+    except ValueError:
+        return None
+    if v <= 0 or v > 99999999:
+        return None
+    return v
+
+
+def validar_mes(mes):
+    """Devolve 'YYYY-MM' (mês atual se vazio) ou None se o formato for inválido."""
+    if not mes:
+        return datetime.now().strftime('%Y-%m')
+    return mes if re.fullmatch(r'\d{4}-(0[1-9]|1[0-2])', mes) else None
+
+
+def deslocar_mes(mes, n):
+    idx = int(mes[:4]) * 12 + (int(mes[5:7]) - 1) + n
+    return f"{idx // 12:04d}-{idx % 12 + 1:02d}"
+
+
+def rotulo_mes(mes):
+    return f"{MESES_ABREV[int(mes[5:7]) - 1]}/{mes[:4]}"
+
+
+def saldo_poupanca(cursor, telegram_id) -> float:
+    cursor.execute("""
+        SELECT COALESCE(SUM(CASE WHEN tipo = 'deposito' THEN valor ELSE -valor END), 0)
+        FROM savings_movements WHERE telegram_id = %s;
+    """, (telegram_id,))
+    return float(cursor.fetchone()[0])
+
+
+def registrar_movimento_poupanca(telegram_id, tipo, valor, descricao=None):
+    """Guarda ('deposito') ou saca ('saque') da poupança. Saque maior que o saldo é recusado.
+    Retorna {"ok": True, "id", "saldo", "meta"} ou {"ok": False, "saldo"}."""
+    telegram_id = str(telegram_id).strip()
+    conexao = obter_conexao()
+    try:
+        with conexao.cursor() as cursor:
+            # trava por usuário: duas mensagens simultâneas não conseguem sacar além do saldo
+            cursor.execute("SELECT pg_advisory_xact_lock(hashtext(%s));", (telegram_id,))
+            saldo = saldo_poupanca(cursor, telegram_id)
+            if tipo == 'saque' and round(valor, 2) > round(saldo, 2):
+                conexao.rollback()
+                return {"ok": False, "saldo": saldo}
+            cursor.execute("""
+                INSERT INTO savings_movements (telegram_id, tipo, valor, descricao)
+                VALUES (%s, %s, %s, %s) RETURNING id;
+            """, (telegram_id, tipo, valor, descricao))
+            novo_id = cursor.fetchone()[0]
+            cursor.execute("SELECT valor_meta FROM savings_goals WHERE telegram_id = %s;", (telegram_id,))
+            row = cursor.fetchone()
+        conexao.commit()
+        novo_saldo = saldo + valor if tipo == 'deposito' else saldo - valor
+        return {"ok": True, "id": novo_id, "saldo": round(novo_saldo, 2),
+                "meta": float(row[0]) if row else None}
+    except Exception:
+        conexao.rollback()
+        raise
+    finally:
+        conexao.close()
+
+
+def _exigir_usuario():
+    """(telegram_id, resposta_de_erro). resposta_de_erro é None quando o usuário está logado."""
+    if 'telegram_id' not in session and 'user_id' not in session:
+        return None, (jsonify({"erro": "Não autenticado"}), 401)
+    return obter_telegram_id_atual(), None
+
+
+def status_orcamento(percentual):
+    if percentual <= 70:
+        return 'ok'
+    return 'alerta' if percentual <= 90 else 'critico'
+
+
+def calcular_orcamentos(tid, mes):
+    ano, m = int(mes[:4]), int(mes[5:7])
+    dias_no_mes = calendar.monthrange(ano, m)[1]
+    agora = datetime.now()
+    mes_hoje = agora.strftime('%Y-%m')
+    if mes == mes_hoje:
+        dia_ref = agora.day
+    elif mes < mes_hoje:
+        dia_ref = dias_no_mes
+    else:
+        dia_ref = 0
+
+    conexao = obter_conexao()
+    try:
+        with conexao.cursor() as cursor:
+            cursor.execute("SELECT id, categoria, limite FROM budgets WHERE telegram_id = %s ORDER BY categoria;", (tid,))
+            budgets = cursor.fetchall()
+            cursor.execute("""
+                SELECT COALESCE(categoria, 'Sem categoria'), SUM(valor)
+                FROM transactions
+                WHERE TRIM(telegram_id) = %s AND tipo = 'despesa' AND TO_CHAR(data, 'YYYY-MM') = %s
+                GROUP BY 1;
+            """, (tid, mes))
+            gastos_rows = cursor.fetchall()
+            total_poup = saldo_poupanca(cursor, tid)
+            cursor.execute("SELECT valor_meta FROM savings_goals WHERE telegram_id = %s;", (tid,))
+            r = cursor.fetchone()
+            meta = float(r[0]) if r else None
+            cursor.execute("""
+                SELECT id, tipo, valor, descricao, TO_CHAR(data, 'DD/MM/YYYY HH24:MI')
+                FROM savings_movements WHERE telegram_id = %s
+                ORDER BY data DESC, id DESC LIMIT 8;
+            """, (tid,))
+            movs = cursor.fetchall()
+    finally:
+        conexao.close()
+
+    gastos = {}
+    for nome, valor in gastos_rows:
+        chave = nome.strip().lower()
+        antigo = gastos.get(chave, (nome, 0.0))[1]
+        gastos[chave] = (nome, antigo + float(valor))
+
+    orcamentos = []
+    usadas = set()
+    for bid, categoria, limite in budgets:
+        limite = float(limite)
+        chave = categoria.strip().lower()
+        usadas.add(chave)
+        gasto = round(gastos.get(chave, (categoria, 0.0))[1], 2)
+        percentual = gasto / limite * 100 if limite else 0.0
+        ritmo = gasto / dia_ref if dia_ref else 0.0
+        projecao = ritmo * dias_no_mes
+        dia_estouro = None
+
+        if gasto > limite:
+            msg = f"Orçamento estourado: você já passou {fmt_brl(gasto - limite)} do limite."
+        elif gasto == limite:
+            msg = "Você atingiu exatamente o limite deste mês."
+        elif mes == mes_hoje and gasto == 0:
+            msg = "Nenhum gasto registrado ainda neste mês."
+        elif mes == mes_hoje and projecao > limite:
+            dia_estouro = math.ceil(limite / ritmo)
+            msg = f"Neste ritmo, o orçamento de {categoria} vai estourar no dia {dia_estouro}."
+        elif mes == mes_hoje:
+            msg = f"Neste ritmo, você termina o mês com {fmt_brl(projecao)} de {fmt_brl(limite)}."
+        elif dia_ref:
+            msg = "Mês encerrado dentro do limite."
+        else:
+            msg = ""
+
+        orcamentos.append({
+            "id": bid, "categoria": categoria, "limite": limite, "gasto": gasto,
+            "percentual": round(percentual, 1), "status": status_orcamento(percentual),
+            "ritmo_diario": round(ritmo, 2),
+            "projecao_fim_mes": round(projecao, 2) if mes == mes_hoje else None,
+            "dia_estouro": dia_estouro, "mensagem": msg,
+        })
+
+    sem_limite = sorted(
+        [{"categoria": n, "gasto": round(v, 2)} for k, (n, v) in gastos.items() if k not in usadas],
+        key=lambda x: -x["gasto"])
+    total_limite = sum(o["limite"] for o in orcamentos)
+    total_gasto = sum(o["gasto"] for o in orcamentos)
+
+    return {
+        "vinculado": True, "mes": mes, "dia_atual": dia_ref, "dias_no_mes": dias_no_mes,
+        "orcamentos": orcamentos, "sem_limite": sem_limite,
+        "categorias_disponiveis": categorias_do_usuario(tid, 'despesa'),
+        "totais": {"limite": round(total_limite, 2), "gasto": round(total_gasto, 2),
+                   "percentual": round(total_gasto / total_limite * 100, 1) if total_limite else 0},
+        "poupanca": {
+            "total": round(total_poup, 2), "meta": meta,
+            "percentual": round(min(total_poup / meta * 100, 100), 1) if meta else None,
+            "movimentos": [{"id": a, "tipo": b, "valor": float(c), "descricao": d, "data_fmt": e}
+                           for a, b, c, d, e in movs],
+        },
+    }
+
+
+def _var_pct(atual, anterior):
+    return (atual - anterior) / anterior * 100 if anterior else None
+
+
+def calcular_relatorio(tid, mes):
+    meses = [deslocar_mes(mes, -i) for i in range(5, -1, -1)]  # 6 meses; o selecionado é o último
+    ant = deslocar_mes(mes, -1)
+    inicio = datetime(int(meses[0][:4]), int(meses[0][5:7]), 1)
+    prox = deslocar_mes(mes, 1)
+    fim = datetime(int(prox[:4]), int(prox[5:7]), 1)
+
+    receitas = {k: 0.0 for k in meses}
+    despesas = {k: 0.0 for k in meses}
+    por_cat = {k: {} for k in meses}
+    dep, saq = {}, {}
+
+    conexao = obter_conexao()
+    try:
+        with conexao.cursor() as cursor:
+            cursor.execute("""
+                SELECT TO_CHAR(data, 'YYYY-MM'), tipo, COALESCE(categoria, 'Sem categoria'), SUM(valor)
+                FROM transactions
+                WHERE TRIM(telegram_id) = %s AND data >= %s AND data < %s
+                GROUP BY 1, 2, 3;
+            """, (tid, inicio, fim))
+            for k, tipo, cat, valor in cursor.fetchall():
+                valor = float(valor)
+                if tipo == 'renda':
+                    receitas[k] += valor
+                elif tipo == 'despesa':
+                    despesas[k] += valor
+                    por_cat[k][cat] = por_cat[k].get(cat, 0.0) + valor
+            cursor.execute("""
+                SELECT TO_CHAR(data, 'YYYY-MM'), tipo, SUM(valor)
+                FROM savings_movements WHERE telegram_id = %s GROUP BY 1, 2;
+            """, (tid,))
+            for k, tipo, valor in cursor.fetchall():
+                (dep if tipo == 'deposito' else saq)[k] = float(valor)
+            total_poup = saldo_poupanca(cursor, tid)
+            cursor.execute("SELECT valor_meta FROM savings_goals WHERE telegram_id = %s;", (tid,))
+            r = cursor.fetchone()
+            meta = float(r[0]) if r else None
+    finally:
+        conexao.close()
+
+    # Série de 6 meses
+    acumulado = sum(dep.get(k, 0) - saq.get(k, 0) for k in set(dep) | set(saq) if k < meses[0])
+    serie = {"labels": [], "receitas": [], "despesas": [], "saldo": [],
+             "depositos": [], "saques": [], "poupanca_liquida": [], "poupanca_acumulada": []}
+    for k in meses:
+        d, s = dep.get(k, 0.0), saq.get(k, 0.0)
+        acumulado += d - s
+        serie["labels"].append(rotulo_mes(k))
+        serie["receitas"].append(round(receitas[k], 2))
+        serie["despesas"].append(round(despesas[k], 2))
+        serie["saldo"].append(round(receitas[k] - despesas[k], 2))
+        serie["depositos"].append(round(d, 2))
+        serie["saques"].append(round(s, 2))
+        serie["poupanca_liquida"].append(round(d - s, 2))
+        serie["poupanca_acumulada"].append(round(acumulado, 2))
+
+    # DRE do mês selecionado
+    cats = por_cat[mes]
+    fixas = sum(v for c, v in cats.items() if c.strip().lower() in CATEGORIAS_FIXAS)
+    variaveis = sum(cats.values()) - fixas
+    desp_total = despesas[mes]
+    rec = receitas[mes]
+    poupado = dep.get(mes, 0.0) - saq.get(mes, 0.0)
+    dre = {
+        "receitas": round(rec, 2), "despesas_fixas": round(fixas, 2),
+        "despesas_variaveis": round(variaveis, 2), "despesas_total": round(desp_total, 2),
+        "saldo": round(rec - desp_total, 2), "poupado": round(poupado, 2),
+        "depositos": round(dep.get(mes, 0.0), 2), "saques": round(saq.get(mes, 0.0), 2),
+        "taxa_poupanca": round(poupado / rec * 100, 1) if rec > 0 else None,
+        "categorias": sorted([
+            {"categoria": c, "tipo": "fixa" if c.strip().lower() in CATEGORIAS_FIXAS else "variavel",
+             "valor": round(v, 2), "pct_despesas": round(v / desp_total * 100, 1) if desp_total else 0}
+            for c, v in cats.items()], key=lambda x: -x["valor"]),
+    }
+
+    # Vilões do orçamento: maior aumento de gasto (categorias variáveis) sobre o mês anterior
+    cats_ant = por_cat[ant]
+    viloes = []
+    for c in set(cats) | set(cats_ant):
+        if c.strip().lower() in CATEGORIAS_FIXAS:
+            continue
+        atual, antes = cats.get(c, 0.0), cats_ant.get(c, 0.0)
+        if atual - antes > 0:
+            viloes.append({"categoria": c, "atual": round(atual, 2), "anterior": round(antes, 2),
+                           "aumento": round(atual - antes, 2),
+                           "pct": round(_var_pct(atual, antes), 1) if antes else None})
+    viloes.sort(key=lambda x: -x["aumento"])
+    viloes = viloes[:3]
+
+    # Insights automáticos (cálculo direto, sem inventar números)
+    insights = []
+    poupado_ant = dep.get(ant, 0.0) - saq.get(ant, 0.0)
+    if rec == 0 and desp_total == 0 and not dep.get(mes) and not saq.get(mes):
+        insights.append({"tipo": "info", "texto": "Nenhum lançamento neste mês ainda."})
+    else:
+        if rec > 0 and desp_total > rec:
+            insights.append({"tipo": "alerta", "texto": f"As despesas superaram a renda em {fmt_brl(desp_total - rec)} neste mês."})
+        elif rec == 0:
+            insights.append({"tipo": "info", "texto": "Nenhuma renda registrada neste mês."})
+        v = _var_pct(desp_total, despesas[ant])
+        if v is not None and v >= 10:
+            insights.append({"tipo": "alerta", "texto": f"Suas despesas totais aumentaram {v:.0f}% em relação a {rotulo_mes(ant)}."})
+        elif v is not None and v <= -10:
+            insights.append({"tipo": "conquista", "texto": f"Suas despesas totais caíram {abs(v):.0f}% em relação a {rotulo_mes(ant)}."})
+
+        mudancas = []
+        for c in set(cats) | set(cats_ant):
+            atual, antes = cats.get(c, 0.0), cats_ant.get(c, 0.0)
+            delta = atual - antes
+            pct = _var_pct(atual, antes)
+            if pct is not None and abs(delta) >= 50 and abs(pct) >= 30:
+                mudancas.append((abs(delta), c, pct, antes, atual))
+        for _, c, pct, antes, atual in sorted(mudancas, reverse=True)[:4]:
+            if pct > 0:
+                insights.append({"tipo": "alerta", "texto": f"Suas despesas com {c} aumentaram {pct:.0f}% em relação ao mês anterior ({fmt_brl(antes)} para {fmt_brl(atual)})."})
+            else:
+                insights.append({"tipo": "conquista", "texto": f"Suas despesas com {c} caíram {abs(pct):.0f}% em relação ao mês anterior ({fmt_brl(antes)} para {fmt_brl(atual)})."})
+
+        if poupado > 0 and rec > 0:
+            taxa = poupado / rec * 100
+            insights.append({"tipo": "conquista" if taxa >= 20 else "info",
+                             "texto": f"Você guardou {taxa:.0f}% da sua renda neste mês ({fmt_brl(poupado)})."})
+        if poupado_ant > 0 and poupado > poupado_ant and (poupado / poupado_ant - 1) * 100 >= 10:
+            insights.append({"tipo": "conquista", "texto": f"Você guardou {(poupado / poupado_ant - 1) * 100:.0f}% a mais na poupança do que no mês anterior."})
+        if poupado < 0:
+            insights.append({"tipo": "alerta", "texto": f"Você sacou {fmt_brl(abs(poupado))} a mais do que guardou na poupança neste mês."})
+
+    try:
+        for o in calcular_orcamentos(tid, mes)["orcamentos"]:
+            if o["gasto"] > o["limite"]:
+                insights.append({"tipo": "alerta", "texto": f"O orçamento de {o['categoria']} estourou em {fmt_brl(o['gasto'] - o['limite'])}."})
+            elif o["percentual"] > 90:
+                insights.append({"tipo": "alerta", "texto": f"O orçamento de {o['categoria']} já usou {o['percentual']:.0f}% do limite."})
+    except Exception as e:
+        print(f"Aviso: insights de orçamento indisponíveis: {e}")
+
+    return {"vinculado": True, "mes": mes, "rotulo": rotulo_mes(mes), "dre": dre,
+            "comparativo": serie, "viloes": viloes, "insights": insights,
+            "poupanca": {"total": round(total_poup, 2), "meta": meta}}
+
+
+def gerar_analise_ia(titulo, dados):
+    """Pede à Groq um texto curto sobre números JÁ calculados (nunca envia o telegram_id)."""
+    prompt = (
+        f"Você é o Fincash, assistente financeiro pessoal. Com base SOMENTE nos números abaixo ({titulo}), "
+        "escreva em português do Brasil de 3 a 5 tópicos curtos, cada um começando com \"- \", "
+        "apontando riscos, conquistas e uma sugestão prática. Não invente valores nem categorias.\n"
+        f"DADOS: {json.dumps(dados, ensure_ascii=False)}"
+    )
+    resposta = cliente_groq.chat.completions.create(
+        model="openai/gpt-oss-120b",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.3,
+    )
+    return resposta.choices[0].message.content.strip()
+
+
+def csv_seguro(valor):
+    """Evita injeção de fórmulas ao abrir o CSV no Excel."""
+    s = "" if valor is None else str(valor)
+    return "'" + s if s[:1] in ("=", "+", "-", "@") else s
+
+
+# ---------- Páginas ----------
+@app_web.route('/orcamentos')
+def orcamentos_page():
+    if 'telegram_id' not in session and 'user_id' not in session:
+        return redirect(url_for('login_page'))
+    return render_template('orcamentos.html')
+
+
+@app_web.route('/relatorios')
+def relatorios_page():
+    if 'telegram_id' not in session and 'user_id' not in session:
+        return redirect(url_for('login_page'))
+    return render_template('relatorios.html')
+
+
+# ---------- API: orçamentos ----------
+@app_web.route('/api/orcamentos', methods=['GET'])
+def api_orcamentos():
+    tid, erro = _exigir_usuario()
+    if erro:
+        return erro
+    mes = validar_mes(request.args.get('mes'))
+    if not mes:
+        return jsonify({"erro": "Mês inválido"}), 400
+    if not tid:
+        return jsonify({"vinculado": False})
+    return jsonify(calcular_orcamentos(tid, mes))
+
+
+@app_web.route('/api/orcamentos', methods=['POST'])
+def api_salvar_orcamento():
+    tid, erro = _exigir_usuario()
+    if erro:
+        return erro
+    if not tid:
+        return jsonify({"erro": "Vincule seu Telegram antes de definir limites."}), 400
+    dados = request.get_json(silent=True) or {}
+    categoria = achar_categoria(tid, 'despesa', dados.get('categoria'))
+    limite = parse_valor_br(dados.get('limite'))
+    if not categoria:
+        return jsonify({"erro": "Categoria inválida."}), 400
+    if not limite:
+        return jsonify({"erro": "Informe um limite maior que zero."}), 400
+
+    conexao = obter_conexao()
+    try:
+        with conexao.cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO budgets (telegram_id, categoria, limite) VALUES (%s, %s, %s)
+                ON CONFLICT (telegram_id, categoria) DO UPDATE SET limite = EXCLUDED.limite;
+            """, (tid, categoria, limite))
+        conexao.commit()
+    except Exception as e:
+        conexao.rollback()
+        print(f"Erro ao salvar orçamento: {e}")
+        return jsonify({"erro": "Não foi possível salvar o limite."}), 500
+    finally:
+        conexao.close()
+    return jsonify({"ok": True})
+
+
+@app_web.route('/api/orcamentos/<int:orcamento_id>', methods=['DELETE'])
+def api_excluir_orcamento(orcamento_id):
+    tid, erro = _exigir_usuario()
+    if erro:
+        return erro
+    if not tid:
+        return jsonify({"erro": "Telegram não vinculado."}), 400
+    conexao = obter_conexao()
+    try:
+        with conexao.cursor() as cursor:
+            cursor.execute("DELETE FROM budgets WHERE id = %s AND telegram_id = %s;", (orcamento_id, tid))
+            apagados = cursor.rowcount
+        conexao.commit()
+    finally:
+        conexao.close()
+    if not apagados:
+        return jsonify({"erro": "Limite não encontrado."}), 404
+    return jsonify({"ok": True})
+
+
+@app_web.route('/api/meta-poupanca', methods=['PUT'])
+def api_meta_poupanca():
+    tid, erro = _exigir_usuario()
+    if erro:
+        return erro
+    if not tid:
+        return jsonify({"erro": "Vincule seu Telegram antes de definir uma meta."}), 400
+    dados = request.get_json(silent=True) or {}
+    bruto = dados.get('valor')
+    remover = bruto in (0, "0", "", None)
+    valor = None if remover else parse_valor_br(bruto)
+    if not remover and not valor:
+        return jsonify({"erro": "Informe um valor válido para a meta."}), 400
+
+    conexao = obter_conexao()
+    try:
+        with conexao.cursor() as cursor:
+            if remover:
+                cursor.execute("DELETE FROM savings_goals WHERE telegram_id = %s;", (tid,))
+            else:
+                cursor.execute("""
+                    INSERT INTO savings_goals (telegram_id, valor_meta) VALUES (%s, %s)
+                    ON CONFLICT (telegram_id) DO UPDATE
+                    SET valor_meta = EXCLUDED.valor_meta, atualizado_em = CURRENT_TIMESTAMP;
+                """, (tid, valor))
+        conexao.commit()
+    except Exception as e:
+        conexao.rollback()
+        print(f"Erro ao salvar meta: {e}")
+        return jsonify({"erro": "Não foi possível salvar a meta."}), 500
+    finally:
+        conexao.close()
+    return jsonify({"ok": True, "meta": valor})
+
+
+@app_web.route('/api/orcamentos/analise-ia', methods=['POST'])
+def api_analise_orcamentos():
+    tid, erro = _exigir_usuario()
+    if erro:
+        return erro
+    if not tid:
+        return jsonify({"erro": "Telegram não vinculado."}), 400
+    mes = validar_mes((request.get_json(silent=True) or {}).get('mes'))
+    if not mes:
+        return jsonify({"erro": "Mês inválido"}), 400
+    d = calcular_orcamentos(tid, mes)
+    if not d["orcamentos"]:
+        return jsonify({"erro": "Defina ao menos um limite para gerar a análise."}), 400
+    resumo = {"mes": mes, "dia_atual": d["dia_atual"], "dias_no_mes": d["dias_no_mes"],
+              "orcamentos": [{k: o[k] for k in ("categoria", "limite", "gasto", "percentual", "projecao_fim_mes", "dia_estouro")}
+                             for o in d["orcamentos"]],
+              "poupanca": {"total": d["poupanca"]["total"], "meta": d["poupanca"]["meta"]}}
+    try:
+        return jsonify({"texto": gerar_analise_ia("orçamentos do mês", resumo)})
+    except Exception as e:
+        print(f"Erro na análise de IA (orçamentos): {e}")
+        return jsonify({"erro": "A IA está indisponível agora. Tente de novo em instantes."}), 502
+
+
+# ---------- API: relatórios ----------
+@app_web.route('/api/relatorios', methods=['GET'])
+def api_relatorios():
+    tid, erro = _exigir_usuario()
+    if erro:
+        return erro
+    mes = validar_mes(request.args.get('mes'))
+    if not mes:
+        return jsonify({"erro": "Mês inválido"}), 400
+    if not tid:
+        return jsonify({"vinculado": False})
+    return jsonify(calcular_relatorio(tid, mes))
+
+
+@app_web.route('/api/relatorios/analise-ia', methods=['POST'])
+def api_analise_relatorio():
+    tid, erro = _exigir_usuario()
+    if erro:
+        return erro
+    if not tid:
+        return jsonify({"erro": "Telegram não vinculado."}), 400
+    mes = validar_mes((request.get_json(silent=True) or {}).get('mes'))
+    if not mes:
+        return jsonify({"erro": "Mês inválido"}), 400
+    r = calcular_relatorio(tid, mes)
+    resumo = {"mes": r["rotulo"], "dre": {k: v for k, v in r["dre"].items()},
+              "comparativo": r["comparativo"], "viloes": r["viloes"]}
+    try:
+        return jsonify({"texto": gerar_analise_ia("relatório mensal", resumo)})
+    except Exception as e:
+        print(f"Erro na análise de IA (relatório): {e}")
+        return jsonify({"erro": "A IA está indisponível agora. Tente de novo em instantes."}), 502
+
+
+@app_web.route('/api/relatorios/exportar.csv', methods=['GET'])
+def api_exportar_csv():
+    tid, erro = _exigir_usuario()
+    if erro:
+        return erro
+    mes = validar_mes(request.args.get('mes'))
+    if not mes or not tid:
+        return jsonify({"erro": "Mês inválido ou Telegram não vinculado."}), 400
+
+    r = calcular_relatorio(tid, mes)
+    num = lambda v: f"{float(v):.2f}".replace(".", ",")
+    buf = io.StringIO()
+    w = csv.writer(buf, delimiter=';')
+    d = r["dre"]
+
+    w.writerow([f"Relatório Fincash - {r['rotulo']}"])
+    w.writerow([])
+    w.writerow(["Resumo do mês (DRE)"])
+    w.writerow(["Item", "Valor (R$)"])
+    w.writerow(["Receitas", num(d["receitas"])])
+    w.writerow(["Despesas fixas", num(d["despesas_fixas"])])
+    w.writerow(["Despesas variáveis", num(d["despesas_variaveis"])])
+    w.writerow(["Total de despesas", num(d["despesas_total"])])
+    w.writerow(["Saldo líquido", num(d["saldo"])])
+    w.writerow(["Guardado na poupança (líquido)", num(d["poupado"])])
+    w.writerow(["Taxa de poupança (%)", "" if d["taxa_poupanca"] is None else num(d["taxa_poupanca"])])
+    w.writerow([])
+    w.writerow(["Despesas por categoria"])
+    w.writerow(["Categoria", "Tipo", "Valor (R$)", "% das despesas"])
+    for c in d["categorias"]:
+        w.writerow([csv_seguro(c["categoria"]), "Fixa" if c["tipo"] == "fixa" else "Variável", num(c["valor"]), num(c["pct_despesas"])])
+    w.writerow([])
+    w.writerow(["Comparativo mensal"])
+    w.writerow(["Mês", "Receitas", "Despesas", "Saldo", "Depósitos na poupança", "Saques da poupança", "Poupança acumulada"])
+    s = r["comparativo"]
+    for i, rot in enumerate(s["labels"]):
+        w.writerow([rot, num(s["receitas"][i]), num(s["despesas"][i]), num(s["saldo"][i]),
+                    num(s["depositos"][i]), num(s["saques"][i]), num(s["poupanca_acumulada"][i])])
+    w.writerow([])
+    w.writerow(["Lançamentos do mês"])
+    w.writerow(["ID", "Data", "Tipo", "Categoria", "Descrição", "Valor (R$)"])
+
+    conexao = obter_conexao()
+    try:
+        with conexao.cursor() as cursor:
+            cursor.execute("""
+                SELECT id, TO_CHAR(data, 'DD/MM/YYYY HH24:MI'), tipo, categoria, descricao, valor
+                FROM transactions
+                WHERE TRIM(telegram_id) = %s AND TO_CHAR(data, 'YYYY-MM') = %s
+                ORDER BY data, id;
+            """, (tid, mes))
+            for tid_, data_, tipo_, cat_, desc_, val_ in cursor.fetchall():
+                w.writerow([tid_, data_, "Entrada" if tipo_ == "renda" else "Saída",
+                            csv_seguro(cat_), csv_seguro(desc_), num(val_)])
+    finally:
+        conexao.close()
+
+    return Response(
+        buf.getvalue().encode('utf-8-sig'),
+        mimetype='text/csv; charset=utf-8',
+        headers={"Content-Disposition": f"attachment; filename=fincash_relatorio_{mes}.csv"},
+    )
+
+
 @app_web.route('/login')
 def login_page():
     if 'telegram_id' in session:
@@ -376,7 +1099,7 @@ def handle_login():
     password = str(dados.get('password', '')).strip()
 
     if not identifier or not password:
-        return jsonify({"erro": "Informe seu Telefone, E-mail ou Telegram ID e a senha."}), 400
+        return jsonify({"erro": "Informe seu telefone ou e-mail e a senha."}), 400
 
     # Telefone digitado com máscara "(11) 99999-9999" vira "11999999999" (igual ao cadastro)
     telefone_limpo = identifier.replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
@@ -831,16 +1554,30 @@ def obter_dados_dashboard(telegram_id):
         row_totais = cursor.fetchone()
         total_renda = float(row_totais[0]) if row_totais else 0.0
         total_despesas = float(row_totais[1]) if row_totais else 0.0
-        saldo = total_renda - total_despesas
 
         # Poupança
-        cursor.execute("""
-            SELECT COALESCE(SUM(valor), 0)
-            FROM transactions
-            WHERE telegram_id = %s AND (categoria ILIKE 'Poupança' OR categoria ILIKE 'Investimentos');
-        """, (telegram_id,))
-        poupanca_row = cursor.fetchone()
-        total_poupanca = float(poupanca_row[0]) if poupanca_row else 0.0
+        # Total guardado = depósitos - saques (acumulado de sempre, vai no card de poupança)
+        total_poupanca = saldo_poupanca(cursor, telegram_id)
+
+        # Movimentos da poupança no período filtrado (mesmo filtro de mês dos totais)
+        cursor.execute(f"""
+            SELECT
+                COALESCE(SUM(CASE WHEN tipo = 'deposito' THEN valor ELSE 0 END), 0),
+                COALESCE(SUM(CASE WHEN tipo = 'saque' THEN valor ELSE 0 END), 0)
+            FROM savings_movements
+            WHERE telegram_id = %s {condicao_data};
+        """, params_base)
+        row_poup = cursor.fetchone()
+        depositos_periodo = float(row_poup[0]) if row_poup else 0.0
+        saques_periodo = float(row_poup[1]) if row_poup else 0.0
+        poupanca_liquida = depositos_periodo - saques_periodo
+
+        # Saldo livre = receitas - despesas - poupança líquida (guardar reduz, sacar aumenta).
+        # As despesas e as categorias continuam SEM a poupança: guardar não é gastar.
+        saldo = total_renda - total_despesas - poupanca_liquida
+        cursor.execute("SELECT valor_meta FROM savings_goals WHERE telegram_id = %s;", (telegram_id,))
+        meta_row = cursor.fetchone()
+        meta_poupanca = float(meta_row[0]) if meta_row else 0.0
 
         # Categoria
         query_categorias = f"""
@@ -881,7 +1618,11 @@ def obter_dados_dashboard(telegram_id):
                 "renda": total_renda,
                 "despesa": total_despesas,
                 "saldo": saldo,
-                "poupanca": total_poupanca
+                "poupanca": total_poupanca,
+                "poupanca_liquida": poupanca_liquida,
+                "depositos": depositos_periodo,
+                "saques": saques_periodo,
+                "meta_poupanca": meta_poupanca
             },
             "categorias": {
                 "labels": categorias,
@@ -907,17 +1648,25 @@ cliente_groq = Groq(api_key=os.getenv("GROQ_API_KEY"))
 # ==========================================
 # LÓGICA DE NEGÓCIO E INTEGRAÇÃO GROQ
 # ==========================================
-def interpretar_mensagem_financeira(texto_usuario: str) -> dict:
+def interpretar_mensagem_financeira(texto_usuario: str, telegram_id=None) -> dict:
     """Envia o texto para a Groq (Llama 3) e retorna um dicionário JSON estruturado."""
+    cats_despesa = ", ".join(categorias_do_usuario(telegram_id, 'despesa'))
+    cats_renda = ", ".join(categorias_do_usuario(telegram_id, 'renda'))
     prompt = f"""
     Você é um assistente financeiro especialista em extrair lançamentos de texto livre.
     Analise o texto a seguir: "{texto_usuario}"
 
     CATEGORIAS DE DESPESA:
-    - Alimentação, Carro, Internet, Moradia, Lazer, Outros.
+    - {cats_despesa}.
 
     CATEGORIAS DE RENDA:
-    - Salário, Freelance, Investimentos, Outras Rendas.
+    - {cats_renda}.
+
+    REGRAS DE CATEGORIA:
+    - Escolha SEMPRE uma categoria da lista quando ela servir.
+    - Use "Outros" (despesa) ou "Outras Rendas" (renda) só se o lançamento for genérico demais.
+    - Se for algo claro que não cabe em nenhuma categoria da lista (ex.: veterinário, academia),
+      sugira em "categoria" um nome novo, curto (1 a 2 palavras).
 
     Retorne APENAS o JSON no formato:
     {{
@@ -1145,17 +1894,43 @@ async def processar_mensagem(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # =============================================================
     # 4. AÇÕES PARA USUÁRIOS JÁ AUTENTICADOS (MENSAGENS / GASTOS)
     # =============================================================
+    # Resposta a uma pergunta em andamento (nova categoria / confirmar exclusão)
+    if await tratar_conversa_pendente(update, context, user_id, texto_usuario):
+        return
+
+    # Categorias: listar, criar e excluir
+    if PADRAO_VER_CATEGORIAS.match(texto_usuario):
+        await responder_lista_categorias(update, user_id)
+        return
+    m_cat = PADRAO_CRIAR_CATEGORIA.match(texto_usuario)
+    if m_cat:
+        await criar_categoria_manual(update, user_id, m_cat.group(2), (m_cat.group(1) or 'despesa').lower())
+        return
+    m_cat = PADRAO_EXCLUIR_CATEGORIA.match(texto_usuario)
+    if m_cat:
+        await iniciar_exclusao_categoria(update, context, user_id, m_cat.group(2).strip(),
+                                         m_cat.group(1).lower() if m_cat.group(1) else None)
+        return
+
     # Interceptador de Exclusão
     padrao_exclusao = r'^(?:apagar|deletar|excluir|remover)\s+(?:id\s*|#\s*)?(\d+)$'
     match_exclusao = re.match(padrao_exclusao, texto_lower)
 
     if match_exclusao:
-        id_deletar = int(match_exclusao.group(1))
-        sucesso = deletar_transacao_por_id(user_id, id_deletar)
-        if sucesso:
-            await update.message.reply_text(f"🗑️ Lançamento **#{id_deletar:02d}** excluído com sucesso!", parse_mode="Markdown")
-        else:
-            await update.message.reply_text(f"❌ Nenhum lançamento encontrado com o ID **#{id_deletar:02d}**.", parse_mode="Markdown")
+        await pedir_confirmacao_exclusao_lancamento(update, context, user_id, int(match_exclusao.group(1)))
+        return
+
+    # Interceptador de Poupança (guardar / sacar / consultar)
+    m_guardar = PADRAO_POUPAR.match(texto_lower) or PADRAO_DEPOSITAR.match(texto_lower)
+    if m_guardar:
+        await responder_movimento_poupanca(update, user_id, 'deposito', m_guardar.group(1), m_guardar.group(2))
+        return
+    m_sacar = PADRAO_SACAR.match(texto_lower)
+    if m_sacar:
+        await responder_movimento_poupanca(update, user_id, 'saque', m_sacar.group(1), m_sacar.group(2))
+        return
+    if PADRAO_VER_POUPANCA.match(texto_lower):
+        await comando_poupanca(update, context)
         return
 
     # Interceptador de Resumo
@@ -1166,21 +1941,27 @@ async def processar_mensagem(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     # Lançamentos Financeiros e Consultoria IA
     try:
-        dados = interpretar_mensagem_financeira(texto_usuario)
+        dados = interpretar_mensagem_financeira(texto_usuario, user_id)
         if dados.get("valor") and float(dados["valor"]) > 0:
-            transacao_id = salvar_transacao(user_id, dados)
-            id_formatado = f"{transacao_id:02d}"
-            tipo_str = "🟢 Renda" if dados["tipo"] == "renda" else "🔴 Despesa"
-            
-            resposta = (
-                f"✅ **Lançamento Registrado!**\n\n"
-                f"🆔 **ID:** {id_formatado}\n"
-                f"📌 **Descrição:** {dados['descricao']}\n"
-                f"💰 **Valor:** R$ {dados['valor']:.2f}\n"
-                f"🏷️ **Categoria:** {dados['categoria']}\n"
-                f"📊 **Tipo:** {tipo_str}"
-            )
-            await update.message.reply_text(resposta, parse_mode="Markdown")
+            dados["valor"] = float(dados["valor"])
+            dados["tipo"] = "renda" if dados.get("tipo") == "renda" else "despesa"
+            dados["descricao"] = dados.get("descricao") or texto_usuario[:100]
+
+            existente = achar_categoria(user_id, dados["tipo"], dados.get("categoria"))
+            if existente:
+                dados["categoria"] = existente
+            else:
+                nome_novo = limpar_nome_categoria(dados.get("categoria"))
+                if len(nome_novo) < 2:
+                    dados["categoria"] = CATEGORIA_GENERICA[dados["tipo"]]
+                else:
+                    # categoria desconhecida: pergunta se cria ou se usa "Outros"
+                    _iniciar_conversa(context, 'nova_categoria', dados=dados, tipo=dados["tipo"], nome=nome_novo)
+                    await update.message.reply_text(
+                        montar_pergunta_nova_categoria(nome_novo, dados, dados["tipo"]), parse_mode="Markdown")
+                    return
+
+            await salvar_e_responder_lancamento(update, user_id, dados)
             return
     except Exception:
         pass
@@ -1246,12 +2027,567 @@ async def comando_deletar(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Informe um número de ID válido.")
         return
 
-    sucesso = deletar_transacao_por_id(user_id, id_deletar)
+    await pedir_confirmacao_exclusao_lancamento(update, context, user_id, id_deletar)
 
-    if sucesso:
-        await update.message.reply_text(f"🗑️ Lançamento **#{id_deletar:02d}** excluído com sucesso!", parse_mode="Markdown")
+# ==========================================
+# CATEGORIAS PERSONALIZADAS E CONFIRMAÇÃO ANTES DE EXCLUIR (TELEGRAM)
+# ==========================================
+CATEGORIAS_RENDA = ["Salário", "Freelance", "Investimentos", "Outras Rendas"]
+# Categoria "coringa" de cada tipo: é onde o lançamento cai quando a pessoa escolhe a opção 2
+CATEGORIA_GENERICA = {"despesa": "Outros", "renda": "Outras Rendas"}
+SAC_EMAIL = os.getenv('SAC_EMAIL', 'aaa@aaa')   # troque pelo e-mail real do SAC (ou defina SAC_EMAIL no .env)
+TEMPO_CONVERSA_SEG = 600                         # pergunta sem resposta expira em 10 minutos
+
+AVISO_SEM_DESFAZER = (
+    "⚠️ Depois de confirmar, a ação *não poderá mais ser desfeita*.\n"
+    f"Para mais informações, entre em contato com o SAC: `{SAC_EMAIL}`"
+)
+
+PADRAO_VER_CATEGORIAS = re.compile(r'^(?:/categorias|minhas categorias|ver categorias|listar categorias)$', re.I)
+PADRAO_CRIAR_CATEGORIA = re.compile(
+    r'^(?:criar|nova|novo|adicionar|cadastrar)\s+(?:uma\s+)?(?:nova\s+)?categoria(?:\s+de\s+(despesa|renda))?\s+(.+)$', re.I)
+PADRAO_EXCLUIR_CATEGORIA = re.compile(
+    r'^(?:apagar|deletar|excluir|remover)\s+(?:a\s+)?categoria(?:\s+de\s+(despesa|renda))?\s+(.+)$', re.I)
+
+# Respostas aceitas (já sem acento, minúsculas e sem pontuação)
+RESP_CANCELAR = {"cancelar", "cancela", "cancel", "desistir", "esquece"}
+RESP_CRIAR = {"1", "um", "criar", "criar categoria", "criar nova", "criar nova categoria", "criar a categoria",
+              "nova", "nova categoria", "quero criar", "sim", "s"}
+RESP_OUTROS = {"2", "dois", "outros", "outro", "outras rendas", "em outros", "colocar em outros",
+               "pode ser outros", "nao", "n"}
+RESP_SIM = {"sim", "s", "yes", "y", "confirmo", "confirmar", "pode", "pode excluir", "claro", "ok"}
+RESP_NAO = {"nao", "n", "no", "cancelar", "cancela", "cancel", "desistir", "voltar"}
+
+
+def normalizar(texto) -> str:
+    """minúsculas, sem acento e sem espaços repetidos: 'Saúde ' e 'saude' viram a mesma coisa."""
+    texto = unicodedata.normalize('NFKD', str(texto or '')).encode('ascii', 'ignore').decode('ascii')
+    return re.sub(r'\s+', ' ', texto.lower()).strip()
+
+
+def limpar_nome_categoria(texto) -> str:
+    """Deixa só letras, números, espaço, & e - (no máximo 30 caracteres) e põe a 1ª letra maiúscula."""
+    texto = str(texto or '').replace('_', ' ')
+    texto = re.sub(r'[^\w\s&-]', '', texto)
+    texto = re.sub(r'\s+', ' ', texto).strip()[:30].strip()
+    return texto[:1].upper() + texto[1:]
+
+
+def md_seguro(texto) -> str:
+    """Tira os caracteres que quebram o Markdown do Telegram."""
+    return re.sub(r'[*_`\[\]]', '', str(texto or ''))
+
+
+def _resposta_limpa(texto) -> str:
+    return re.sub(r'[^\w\s]', '', normalizar(texto)).strip()
+
+
+def _plural(n, singular, plural) -> str:
+    return f"{n} {singular if n == 1 else plural}"
+
+
+def _listar_categorias(cursor, tid, tipo):
+    """Retorna (padrão, extras). Extras = criadas pela pessoa + qualquer categoria que já aparece nos lançamentos."""
+    padrao = list(CATEGORIAS_DESPESA if tipo == 'despesa' else CATEGORIAS_RENDA)
+    vistos = {normalizar(c) for c in padrao}
+    cursor.execute("SELECT nome FROM categories WHERE telegram_id = %s AND tipo = %s ORDER BY nome;", (tid, tipo))
+    nomes = [r[0] for r in cursor.fetchall()]
+    cursor.execute("""
+        SELECT DISTINCT TRIM(categoria) FROM transactions
+        WHERE TRIM(telegram_id) = %s AND tipo = %s AND categoria IS NOT NULL AND TRIM(categoria) <> ''
+        ORDER BY 1;
+    """, (tid, tipo))
+    nomes += [r[0] for r in cursor.fetchall()]
+    extras = []
+    for n in nomes:
+        k = normalizar(n)
+        if k and k not in vistos:
+            vistos.add(k)
+            extras.append(n)
+    return padrao, extras
+
+
+def categorias_do_usuario(telegram_id, tipo='despesa'):
+    """Categorias padrão + as da pessoa (usado no Telegram, nos orçamentos e no prompt da IA)."""
+    if not telegram_id:
+        return list(CATEGORIAS_DESPESA if tipo == 'despesa' else CATEGORIAS_RENDA)
+    conexao = obter_conexao()
+    try:
+        with conexao.cursor() as cursor:
+            padrao, extras = _listar_categorias(cursor, str(telegram_id).strip(), tipo)
+        return padrao + extras
+    finally:
+        conexao.close()
+
+
+def achar_categoria(telegram_id, tipo, nome):
+    """Devolve o nome oficial da categoria (ignora maiúscula/acento) ou None se ela não existir."""
+    alvo = normalizar(nome)
+    if not alvo:
+        return None
+    for c in categorias_do_usuario(telegram_id, tipo):
+        if normalizar(c) == alvo:
+            return c
+    return None
+
+
+def criar_categoria(telegram_id, tipo, nome):
+    """Retorna ('criada' | 'existe' | 'invalida', nome_final)."""
+    telegram_id = str(telegram_id).strip()
+    nome = limpar_nome_categoria(nome)
+    if len(nome) < 2:
+        return 'invalida', nome
+    conexao = obter_conexao()
+    try:
+        with conexao.cursor() as cursor:
+            cursor.execute("SELECT pg_advisory_xact_lock(hashtext(%s));", ('categoria:' + telegram_id,))
+            padrao, extras = _listar_categorias(cursor, telegram_id, tipo)
+            for existente in padrao + extras:
+                if normalizar(existente) == normalizar(nome):
+                    conexao.rollback()
+                    return 'existe', existente
+            cursor.execute("INSERT INTO categories (telegram_id, nome, tipo) VALUES (%s, %s, %s);",
+                           (telegram_id, nome, tipo))
+        conexao.commit()
+        return 'criada', nome
+    except Exception:
+        conexao.rollback()
+        raise
+    finally:
+        conexao.close()
+
+
+def localizar_categoria_para_excluir(telegram_id, nome, tipo=None):
+    """Retorna (status, tipo, nome_oficial). status: 'ok' | 'padrao' | 'nao_existe' | 'ambigua'."""
+    alvo = normalizar(nome)
+    achadas, e_padrao = [], False
+    for t in ([tipo] if tipo else ['despesa', 'renda']):
+        padrao = CATEGORIAS_DESPESA if t == 'despesa' else CATEGORIAS_RENDA
+        if alvo in {normalizar(c) for c in padrao}:
+            e_padrao = True
+            continue
+        for c in categorias_do_usuario(telegram_id, t):
+            if normalizar(c) == alvo and normalizar(c) not in {normalizar(p) for p in padrao}:
+                achadas.append((t, c))
+    if len(achadas) == 1:
+        return 'ok', achadas[0][0], achadas[0][1]
+    if len(achadas) > 1:
+        return 'ambigua', None, None
+    return ('padrao' if e_padrao else 'nao_existe'), None, None
+
+
+def _dados_da_categoria(cursor, tid, tipo, nome):
+    """Tudo que está ligado à categoria: lançamentos, limite de orçamento e o cadastro dela."""
+    alvo = normalizar(nome)
+    cursor.execute("""
+        SELECT id, valor, descricao, data, categoria FROM transactions
+        WHERE TRIM(telegram_id) = %s AND tipo = %s ORDER BY data, id;
+    """, (tid, tipo))
+    lancs = [r for r in cursor.fetchall() if normalizar(r[4]) == alvo]
+    orcamentos = []
+    if tipo == 'despesa':
+        cursor.execute("SELECT id, categoria, limite FROM budgets WHERE telegram_id = %s;", (tid,))
+        orcamentos = [r for r in cursor.fetchall() if normalizar(r[1]) == alvo]
+    cursor.execute("SELECT id, nome FROM categories WHERE telegram_id = %s AND tipo = %s;", (tid, tipo))
+    cadastros = [r for r in cursor.fetchall() if normalizar(r[1]) == alvo]
+    return lancs, orcamentos, cadastros
+
+
+def _resumir(tipo, nome, lancs, orcamentos):
+    return {
+        "nome": nome, "tipo": tipo,
+        "lancamentos": [{"id": r[0], "valor": float(r[1]), "descricao": r[2],
+                         "data": r[3].strftime('%d/%m/%Y') if r[3] else ''} for r in lancs],
+        "total": round(sum(float(r[1]) for r in lancs), 2),
+        "limite": float(orcamentos[0][2]) if orcamentos else None,
+    }
+
+
+def resumo_exclusao_categoria(telegram_id, tipo, nome):
+    conexao = obter_conexao()
+    try:
+        with conexao.cursor() as cursor:
+            lancs, orcamentos, _ = _dados_da_categoria(cursor, str(telegram_id).strip(), tipo, nome)
+        return _resumir(tipo, nome, lancs, orcamentos)
+    finally:
+        conexao.close()
+
+
+def excluir_categoria(telegram_id, tipo, nome):
+    """Apaga a categoria, os lançamentos dela e o limite de orçamento. Os lançamentos vão para
+    transactions_backup e um registro fica em dados_salvos (auditoria). Tudo na mesma transação."""
+    tid = str(telegram_id).strip()
+    conexao = obter_conexao()
+    try:
+        with conexao.cursor() as cursor:
+            cursor.execute("SELECT pg_advisory_xact_lock(hashtext(%s));", ('categoria:' + tid,))
+            lancs, orcamentos, cadastros = _dados_da_categoria(cursor, tid, tipo, nome)
+            resumo = _resumir(tipo, nome, lancs, orcamentos)
+            if lancs:
+                cursor.execute("""
+                    WITH removidos AS (
+                        DELETE FROM transactions
+                        WHERE id = ANY(%s) AND TRIM(telegram_id) = %s
+                        RETURNING id, telegram_id, tipo, valor, categoria, descricao, data
+                    )
+                    INSERT INTO transactions_backup
+                        (id_original, telegram_id, tipo, valor, categoria, descricao, data)
+                    SELECT id, telegram_id, tipo, valor, categoria, descricao, data FROM removidos;
+                """, ([r[0] for r in lancs], tid))
+            if orcamentos:
+                cursor.execute("DELETE FROM budgets WHERE id = ANY(%s) AND telegram_id = %s;",
+                               ([r[0] for r in orcamentos], tid))
+            if cadastros:
+                cursor.execute("DELETE FROM categories WHERE id = ANY(%s) AND telegram_id = %s;",
+                               ([r[0] for r in cadastros], tid))
+            cursor.execute("SELECT id FROM users WHERE telegram_id = %s;", (tid,))
+            u = cursor.fetchone()
+            cursor.execute("""
+                INSERT INTO dados_salvos (user_id, tipo_operacao, dados_antigos)
+                VALUES (%s, 'exclusao_categoria', %s::jsonb);
+            """, (u[0] if u else None, json.dumps(resumo, ensure_ascii=False)))
+        conexao.commit()
+        return resumo
+    except Exception:
+        conexao.rollback()
+        raise
+    finally:
+        conexao.close()
+
+
+def obter_transacao(telegram_id, id_transacao):
+    conexao = obter_conexao()
+    try:
+        with conexao.cursor() as cursor:
+            cursor.execute("""
+                SELECT id, tipo, valor, categoria, descricao, TO_CHAR(data, 'DD/MM/YYYY HH24:MI')
+                FROM transactions WHERE id = %s AND TRIM(telegram_id) = %s;
+            """, (id_transacao, str(telegram_id).strip()))
+            return cursor.fetchone()
+    finally:
+        conexao.close()
+
+
+# ---------- mensagens (texto simples e direto) ----------
+def montar_pergunta_nova_categoria(nome, dados, tipo):
+    generica = CATEGORIA_GENERICA[tipo]
+    return (
+        f"🤔 Ainda não existe uma categoria para *{md_seguro(nome)}*.\n\n"
+        f"📌 {md_seguro(dados.get('descricao'))} · {fmt_brl(dados['valor'])}\n\n"
+        "O que você prefere?\n"
+        f"1️⃣ Criar a categoria *{md_seguro(nome)}*\n"
+        f"2️⃣ Colocar em *{generica}*\n\n"
+        "Responda *1* ou *2* (se preferir, pode escrever \"criar\" ou \"outros\")."
+    )
+
+
+def montar_aviso_exclusao_categoria(info):
+    nome = md_seguro(info['nome'])
+    tipo_txt = "despesa" if info['tipo'] == 'despesa' else "renda"
+    linhas = [
+        f"⚠️ *Tem certeza que deseja excluir a categoria {nome}?*",
+        "",
+        "Veja tudo o que será apagado:",
+        f"🏷️ Categoria *{nome}* ({tipo_txt})",
+    ]
+    qtd = len(info['lancamentos'])
+    if qtd:
+        linhas.append(f"🧾 {_plural(qtd, 'lançamento', 'lançamentos')}, somando {fmt_brl(info['total'])}:")
+        for l in info['lancamentos'][:10]:
+            linhas.append(f"   • #{l['id']:02d} · {l['data']} · {md_seguro(l['descricao'])[:30]} · {fmt_brl(l['valor'])}")
+        if qtd > 10:
+            linhas.append(f"   … e mais {qtd - 10}")
+        linhas.append("   (eles também deixam de contar no seu saldo e nos gráficos)")
     else:
+        linhas.append("🧾 Nenhum lançamento nesta categoria")
+    if info['limite'] is not None:
+        linhas.append(f"💰 Limite mensal de orçamento: {fmt_brl(info['limite'])}")
+    linhas += ["", "Responda *sim* para excluir ou *não* para cancelar.", "", AVISO_SEM_DESFAZER]
+    return "\n".join(linhas)
+
+
+def montar_aviso_exclusao_lancamento(row):
+    id_, tipo, valor, categoria, descricao, data = row
+    return (
+        f"⚠️ *Tem certeza que deseja excluir este lançamento?*\n\n"
+        "Veja o que será apagado:\n"
+        f"🆔 #{id_:02d}\n"
+        f"📌 {md_seguro(descricao)}\n"
+        f"💰 {fmt_brl(valor)}\n"
+        f"🏷️ {md_seguro(categoria) or 'Sem categoria'}\n"
+        f"📊 {'Renda' if tipo == 'renda' else 'Despesa'}\n"
+        f"📅 {data}\n\n"
+        "Responda *sim* para excluir ou *não* para cancelar.\n\n"
+        f"{AVISO_SEM_DESFAZER}"
+    )
+
+
+# ---------- conversa em andamento (guardada na memória do bot, por usuário) ----------
+def _iniciar_conversa(context, etapa, **dados):
+    context.user_data['conversa'] = {"etapa": etapa, "criado_em": time.time(), **dados}
+
+
+def _conversa_ativa(context):
+    c = context.user_data.get('conversa')
+    if not c:
+        return None
+    if time.time() - c['criado_em'] > TEMPO_CONVERSA_SEG:
+        context.user_data.pop('conversa', None)
+        return None
+    return c
+
+
+async def salvar_e_responder_lancamento(update: Update, user_id: str, dados: dict):
+    transacao_id = salvar_transacao(user_id, dados)
+    tipo_str = "🟢 Renda" if dados["tipo"] == "renda" else "🔴 Despesa"
+    resposta = (
+        f"✅ **Lançamento Registrado!**\n\n"
+        f"🆔 **ID:** {transacao_id:02d}\n"
+        f"📌 **Descrição:** {dados['descricao']}\n"
+        f"💰 **Valor:** R$ {dados['valor']:.2f}\n"
+        f"🏷️ **Categoria:** {dados['categoria']}\n"
+        f"📊 **Tipo:** {tipo_str}"
+    )
+    await update.message.reply_text(resposta, parse_mode="Markdown")
+
+
+async def tratar_conversa_pendente(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: str, texto: str) -> bool:
+    """Se existe uma pergunta esperando resposta, trata a resposta. Retorna True se a mensagem foi consumida."""
+    conversa = _conversa_ativa(context)
+    if not conversa:
+        return False
+    resp = _resposta_limpa(texto)
+    etapa = conversa['etapa']
+    responder = lambda msg: update.message.reply_text(msg, parse_mode="Markdown")
+
+    try:
+        if etapa == 'nova_categoria':
+            dados, tipo = conversa['dados'], conversa['tipo']
+            if resp in RESP_CANCELAR:
+                context.user_data.pop('conversa', None)
+                await responder("Tudo bem, cancelei. Nenhum lançamento foi registrado. 👍")
+            elif resp in RESP_CRIAR:
+                status, nome = criar_categoria(user_id, tipo, conversa['nome'])
+                dados['categoria'] = nome if status != 'invalida' else CATEGORIA_GENERICA[tipo]
+                context.user_data.pop('conversa', None)
+                if status == 'criada':
+                    await responder(f"🏷️ Categoria *{md_seguro(nome)}* criada!")
+                await salvar_e_responder_lancamento(update, user_id, dados)
+            elif resp in RESP_OUTROS:
+                dados['categoria'] = CATEGORIA_GENERICA[tipo]
+                context.user_data.pop('conversa', None)
+                await salvar_e_responder_lancamento(update, user_id, dados)
+            else:
+                await responder("Não entendi 😅 Responda *1* para criar a categoria, *2* para usar "
+                                f"*{CATEGORIA_GENERICA[tipo]}* ou escreva *cancelar*.")
+            return True
+
+        if etapa == 'excluir_categoria':
+            if resp in RESP_SIM:
+                context.user_data.pop('conversa', None)
+                r = excluir_categoria(user_id, conversa['tipo'], conversa['nome'])
+                msg = f"🗑️ Categoria *{md_seguro(r['nome'])}* excluída."
+                if r['lancamentos']:
+                    msg += f"\nForam apagados {_plural(len(r['lancamentos']), 'lançamento', 'lançamentos')} ({fmt_brl(r['total'])})."
+                if r['limite'] is not None:
+                    msg += "\nO limite de orçamento dela também foi removido."
+                await responder(msg)
+            elif resp in RESP_NAO:
+                context.user_data.pop('conversa', None)
+                await responder("Tudo bem, nada foi excluído. ✅")
+            else:
+                await responder("Responda *sim* para excluir ou *não* para cancelar.")
+            return True
+
+        if etapa == 'excluir_lancamento':
+            id_ = conversa['id']
+            if resp in RESP_SIM:
+                context.user_data.pop('conversa', None)
+                if deletar_transacao_por_id(user_id, id_):
+                    await responder(f"🗑️ Lançamento *#{id_:02d}* excluído com sucesso!")
+                else:
+                    await responder(f"❌ Nenhum lançamento encontrado com o ID *#{id_:02d}*.")
+            elif resp in RESP_NAO:
+                context.user_data.pop('conversa', None)
+                await responder("Tudo bem, nada foi excluído. ✅")
+            else:
+                await responder("Responda *sim* para excluir ou *não* para cancelar.")
+            return True
+    except Exception as e:
+        context.user_data.pop('conversa', None)
+        print(f"❌ Erro na conversa pendente ({etapa}): {e}")
+        await update.message.reply_text("❌ Ocorreu um erro. Nada foi alterado, tente de novo.")
+        return True
+
+    context.user_data.pop('conversa', None)
+    return False
+
+
+async def pedir_confirmacao_exclusao_lancamento(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: str, id_deletar: int):
+    row = obter_transacao(user_id, id_deletar)
+    if not row:
         await update.message.reply_text(f"❌ Nenhum lançamento encontrado com o ID **#{id_deletar:02d}**.", parse_mode="Markdown")
+        return
+    _iniciar_conversa(context, 'excluir_lancamento', id=id_deletar)
+    await update.message.reply_text(montar_aviso_exclusao_lancamento(row), parse_mode="Markdown")
+
+
+async def iniciar_exclusao_categoria(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: str, nome: str, tipo=None):
+    status, tipo_ok, nome_ok = localizar_categoria_para_excluir(user_id, nome, tipo)
+    nome_txt = md_seguro(nome)
+    if status == 'padrao':
+        await update.message.reply_text(f"🔒 *{nome_txt}* é uma categoria padrão do Fincash e não pode ser excluída.", parse_mode="Markdown")
+    elif status == 'nao_existe':
+        await update.message.reply_text(f"❌ Não encontrei a categoria *{nome_txt}*. Envie */categorias* para ver as suas.", parse_mode="Markdown")
+    elif status == 'ambigua':
+        await update.message.reply_text(
+            f"Existe uma *{nome_txt}* em despesas e outra em rendas. Qual delas?\n"
+            f"• `excluir categoria de despesa {nome}`\n• `excluir categoria de renda {nome}`", parse_mode="Markdown")
+    else:
+        info = resumo_exclusao_categoria(user_id, tipo_ok, nome_ok)
+        _iniciar_conversa(context, 'excluir_categoria', tipo=tipo_ok, nome=nome_ok)
+        await update.message.reply_text(montar_aviso_exclusao_categoria(info), parse_mode="Markdown")
+
+
+async def criar_categoria_manual(update: Update, user_id: str, nome: str, tipo: str):
+    status, nome_final = criar_categoria(user_id, tipo, nome)
+    if status == 'invalida':
+        await update.message.reply_text("⚠️ Esse nome não serve. Use de 2 a 30 letras, por exemplo: `criar categoria Pet`", parse_mode="Markdown")
+    elif status == 'existe':
+        await update.message.reply_text(f"ℹ️ A categoria *{md_seguro(nome_final)}* já existe.", parse_mode="Markdown")
+    else:
+        await update.message.reply_text(
+            f"🏷️ Categoria *{md_seguro(nome_final)}* criada!\nAgora é só registrar normalmente, por exemplo: "
+            f"`{md_seguro(nome_final).lower()} 50 reais`", parse_mode="Markdown")
+
+
+async def responder_lista_categorias(update: Update, user_id: str):
+    linhas = ["🏷️ *Suas categorias*"]
+    for tipo, titulo in (('despesa', '🔴 Despesas'), ('renda', '🟢 Rendas')):
+        conexao = obter_conexao()
+        try:
+            with conexao.cursor() as cursor:
+                padrao, extras = _listar_categorias(cursor, user_id, tipo)
+        finally:
+            conexao.close()
+        linhas += ["", f"*{titulo}*", ", ".join(md_seguro(c) for c in padrao)]
+        if extras:
+            linhas.append("➕ Criadas por você: " + ", ".join(md_seguro(c) for c in extras))
+    linhas += ["", "Para criar: `criar categoria Pet`", "Para excluir: `excluir categoria Pet`"]
+    await update.message.reply_text("\n".join(linhas), parse_mode="Markdown")
+
+
+async def comando_categorias(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    if not usuario_esta_vinculado(user_id):
+        await update.message.reply_text("⚠️ Vincule sua conta primeiro com `/login <email_ou_telefone> <senha>`.", parse_mode="Markdown")
+        return
+    await responder_lista_categorias(update, user_id)
+
+
+async def comando_nova_categoria(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    if not usuario_esta_vinculado(user_id):
+        await update.message.reply_text("⚠️ Vincule sua conta primeiro com `/login <email_ou_telefone> <senha>`.", parse_mode="Markdown")
+        return
+    if not context.args:
+        await update.message.reply_text("⚠️ **Uso correto:** `/novacategoria Pet`", parse_mode="Markdown")
+        return
+    await criar_categoria_manual(update, user_id, " ".join(context.args), 'despesa')
+
+
+async def comando_excluir_categoria(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    if not usuario_esta_vinculado(user_id):
+        await update.message.reply_text("⚠️ Vincule sua conta primeiro com `/login <email_ou_telefone> <senha>`.", parse_mode="Markdown")
+        return
+    if not context.args:
+        await update.message.reply_text("⚠️ **Uso correto:** `/excluircategoria Pet`", parse_mode="Markdown")
+        return
+    await iniciar_exclusao_categoria(update, context, user_id, " ".join(context.args))
+
+
+# ==========================================
+# POUPANÇA NO TELEGRAM (guardar / sacar / consultar)
+# ==========================================
+def usuario_esta_vinculado(telegram_id: str) -> bool:
+    conexao = obter_conexao()
+    try:
+        with conexao.cursor() as cursor:
+            cursor.execute("SELECT 1 FROM users WHERE telegram_id = %s;", (str(telegram_id),))
+            return cursor.fetchone() is not None
+    finally:
+        conexao.close()
+
+
+async def responder_movimento_poupanca(update: Update, user_id: str, tipo: str, valor_txt: str, descricao: str = ""):
+    valor = parse_valor_br(valor_txt)
+    if not valor:
+        exemplo = "guardar 200" if tipo == 'deposito' else "sacar 100 da poupança"
+        await update.message.reply_text(f"❌ Informe um valor válido. Exemplo: `{exemplo}`", parse_mode="Markdown")
+        return
+    if not usuario_esta_vinculado(user_id):
+        await update.message.reply_text("⚠️ Seu Telegram ainda não está vinculado ao **Fincash**. Use `/login <email_ou_telefone> <senha>`.", parse_mode="Markdown")
+        return
+
+    try:
+        r = registrar_movimento_poupanca(user_id, tipo, valor, (descricao or "").strip()[:200] or None)
+    except Exception as e:
+        print(f"❌ Erro ao registrar movimento de poupança: {e}")
+        await update.message.reply_text("❌ Não consegui registrar agora. Tente novamente em instantes.")
+        return
+
+    if not r["ok"]:
+        await update.message.reply_text(
+            f"❌ Saldo insuficiente na poupança. Você tem {fmt_brl(r['saldo'])} guardado.")
+        return
+
+    if tipo == 'deposito':
+        linhas = [f"🐷 **Guardado!** +{fmt_brl(valor)} na poupança."]
+    else:
+        linhas = [f"💸 **Retirada registrada!** -{fmt_brl(valor)} da poupança."]
+    linhas.append(f"💰 **Total guardado:** {fmt_brl(r['saldo'])}")
+    if r["meta"]:
+        linhas.append(f"🎯 **Meta:** {min(r['saldo'] / r['meta'] * 100, 100):.0f}% de {fmt_brl(r['meta'])}")
+    await update.message.reply_text("\n".join(linhas), parse_mode="Markdown")
+
+
+async def comando_poupanca(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    if not usuario_esta_vinculado(user_id):
+        await update.message.reply_text("⚠️ Seu Telegram ainda não está vinculado ao **Fincash**.", parse_mode="Markdown")
+        return
+    conexao = obter_conexao()
+    try:
+        with conexao.cursor() as cursor:
+            saldo = saldo_poupanca(cursor, user_id)
+            cursor.execute("SELECT valor_meta FROM savings_goals WHERE telegram_id = %s;", (user_id,))
+            row = cursor.fetchone()
+    finally:
+        conexao.close()
+    linhas = [f"💰 **Total guardado:** {fmt_brl(saldo)}"]
+    if row:
+        meta = float(row[0])
+        linhas.append(f"🎯 **Meta:** {min(saldo / meta * 100, 100):.0f}% de {fmt_brl(meta)}")
+    linhas.append("\nPara mexer: `guardar 200` ou `sacar 100 da poupança`.")
+    await update.message.reply_text("\n".join(linhas), parse_mode="Markdown")
+
+
+async def comando_guardar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("⚠️ **Uso correto:** `/guardar 200`", parse_mode="Markdown")
+        return
+    await responder_movimento_poupanca(update, str(update.effective_user.id), 'deposito',
+                                       context.args[0], " ".join(context.args[1:]))
+
+
+async def comando_sacar(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        await update.message.reply_text("⚠️ **Uso correto:** `/sacar 100`", parse_mode="Markdown")
+        return
+    await responder_movimento_poupanca(update, str(update.effective_user.id), 'saque',
+                                       context.args[0], " ".join(context.args[1:]))
+
 
 # ==========================================
 # INICIALIZAÇÃO DA APLICAÇÃO (BOT + WEB)
@@ -1277,6 +2613,12 @@ if __name__ == "__main__":
         app.add_handler(CommandHandler("deletar", comando_deletar))
         app.add_handler(CommandHandler("apagar", comando_deletar))
         app.add_handler(CommandHandler("excluir", comando_deletar))
+        app.add_handler(CommandHandler("categorias", comando_categorias))
+        app.add_handler(CommandHandler("novacategoria", comando_nova_categoria))
+        app.add_handler(CommandHandler("excluircategoria", comando_excluir_categoria))
+        app.add_handler(CommandHandler("guardar", comando_guardar))
+        app.add_handler(CommandHandler("sacar", comando_sacar))
+        app.add_handler(CommandHandler("poupanca", comando_poupanca))
         app.add_handler(CommandHandler("login", processar_mensagem))
         
         # Registra tratador de texto E compartilhamento de contatos
