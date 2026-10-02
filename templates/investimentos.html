@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>fincash - Investimentos</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        'brand-sidebar': '#0f172a',
+                        'brand-active': '#1e293b',
+                    }
+                }
+            }
+        }
+    </script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+    </style>
+</head>
+
+<body class="bg-slate-100 text-slate-800 antialiased flex h-screen overflow-hidden">
+
+    <!-- Mobile Sidebar Backdrop -->
+    <div id="sidebar-backdrop" onclick="toggleSidebar()"
+        class="fixed inset-0 bg-slate-900/50 z-20 hidden lg:hidden transition-opacity"></div>
+
+    <!-- Sidebar -->
+    <aside id="sidebar"
+        class="fixed lg:static inset-y-0 left-0 z-30 w-64 bg-brand-sidebar text-white flex flex-col transform -translate-x-full lg:translate-x-0 transition-transform duration-300 ease-in-out shadow-xl">
+        <div class="p-6 flex items-center gap-3 border-b border-slate-700/50">
+            <div class="bg-blue-600 p-2 rounded-lg text-white flex items-center justify-center shadow-lg">
+                <i class="fa-solid fa-chart-line text-xl"></i>
+            </div>
+            <span class="text-2xl font-extrabold tracking-tight text-white">fincash</span>
+        </div>
+
+        <nav class="flex-1 px-4 py-6 space-y-2 overflow-y-auto">
+            <a href="/"
+                class="flex items-center gap-3 px-4 py-3 text-slate-300 hover:bg-slate-800/60 hover:text-white font-medium rounded-xl transition duration-200">
+                <i class="fa-solid fa-square-poll-vertical w-5"></i>
+                <span>Visão Geral</span>
+            </a>
+            <a href="/transacoes"
+                class="flex items-center gap-3 px-4 py-3 text-slate-300 hover:bg-slate-800/60 hover:text-white font-medium rounded-xl transition duration-200">
+                <i class="fa-solid fa-arrow-right-arrow-left w-5"></i>
+                <span>Transações</span>
+            </a>
+            <a href="/orcamentos"
+                class="flex items-center gap-3 px-4 py-3 text-slate-300 hover:bg-slate-800/60 hover:text-white font-medium rounded-xl transition duration-200">
+                <i class="fa-solid fa-wallet w-5"></i>
+                <span>Orçamentos</span>
+            </a>
+            <a href="/investimentos"
+                class="flex items-center gap-3 px-4 py-3 bg-brand-active text-white font-medium rounded-xl transition duration-200 shadow-sm border-l-4 border-emerald-500">
+                <i class="fa-solid fa-arrow-trend-up w-5 text-emerald-400"></i>
+                <span>Investimentos</span>
+            </a>
+            <a href="/relatorios"
+                class="flex items-center gap-3 px-4 py-3 text-slate-300 hover:bg-slate-800/60 hover:text-white font-medium rounded-xl transition duration-200">
+                <i class="fa-solid fa-chart-pie w-5"></i>
+                <span>Relatórios</span>
+            </a>
+            <a href="/perfil"
+                class="flex items-center gap-3 px-4 py-3 text-slate-300 hover:bg-slate-800/60 hover:text-white font-medium rounded-xl transition duration-200">
+                <i class="fa-solid fa-user w-5"></i>
+                <span>Meu Perfil</span>
+            </a>
+        </nav>
+
+        <div class="p-4 border-t border-slate-700/50">
+            <a href="/logout"
+                class="flex items-center gap-3 px-4 py-2.5 text-red-400 hover:bg-red-500/10 hover:text-red-300 rounded-xl transition font-medium text-sm">
+                <i class="fa-solid fa-right-from-bracket"></i>
+                <span>Sair da conta</span>
+            </a>
+        </div>
+    </aside>
+
+    <!-- Main Content -->
+    <div class="flex-1 flex flex-col h-full overflow-hidden">
+
+        <header class="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between shadow-sm z-10">
+            <div class="flex items-center gap-4">
+                <button onclick="toggleSidebar()"
+                    class="lg:hidden text-slate-600 hover:text-slate-900 focus:outline-none p-1">
+                    <i class="fa-solid fa-bars text-xl"></i>
+                </button>
+                <h1 class="text-2xl font-bold text-slate-800 tracking-tight">Investimentos & Mercado</h1>
+            </div>
+        </header>
+
+        <main class="flex-1 overflow-y-auto p-4 md:p-6 bg-slate-100">
+            <div class="max-w-7xl mx-auto space-y-6">
+
+                <!-- INDICADORES ECONÔMICOS EM TEMPO REAL -->
+                <div id="indicadores-container" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+                    <div class="bg-white p-3.5 rounded-2xl border border-slate-200 text-center animate-pulse">Carregando
+                        indicadores...</div>
+                </div>
+
+                <!-- SELETOR DE PERFIL DE INVESTIDOR -->
+                <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200/80">
+                    <h2 class="text-xs font-bold tracking-wider text-slate-500 uppercase mb-4">
+                        📊 Escolha seu Perfil de Investidor
+                    </h2>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3" id="botoes-perfil">
+                        <button onclick="selecionarPerfil('conservador')" id="btn-conservador"
+                            class="p-4 rounded-xl border text-left transition duration-200 hover:border-emerald-500">
+                            <span class="text-2xl">🛡️</span>
+                            <h3 class="font-bold text-slate-800 mt-1">Conservador</h3>
+                            <p class="text-xs text-slate-500 mt-0.5">Segurança e liquidez (Renda Fixa, Selic)</p>
+                        </button>
+                        <button onclick="selecionarPerfil('moderado')" id="btn-moderado"
+                            class="p-4 rounded-xl border text-left transition duration-200 hover:border-blue-500">
+                            <span class="text-2xl">⚖️</span>
+                            <h3 class="font-bold text-slate-800 mt-1">Moderado</h3>
+                            <p class="text-xs text-slate-500 mt-0.5">Equilíbrio (FIIs, Dividendos, ETFs)</p>
+                        </button>
+                        <button onclick="selecionarPerfil('arrojado')" id="btn-arrojado"
+                            class="p-4 rounded-xl border text-left transition duration-200 hover:border-purple-500">
+                            <span class="text-2xl">🚀</span>
+                            <h3 class="font-bold text-slate-800 mt-1">Arrojado</h3>
+                            <p class="text-xs text-slate-500 mt-0.5">Foco em crescimento (Ações, Bolsa)</p>
+                        </button>
+                        <button onclick="selecionarPerfil('cripto')" id="btn-cripto"
+                            class="p-4 rounded-xl border text-left transition duration-200 hover:border-amber-500">
+                            <span class="text-2xl">🌐</span>
+                            <h3 class="font-bold text-slate-800 mt-1">Cripto</h3>
+                            <p class="text-xs text-slate-500 mt-0.5">Alta volatilidade (BTC, ETH, Web3)</p>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- PAINEL PRINCIPAL: NOTÍCIAS + ANÁLISE IA -->
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+
+                    <!-- FEED DE NOTÍCIAS (2 COLUNAS) -->
+                    <div class="lg:col-span-2 space-y-4">
+                        <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200/80">
+                            <div class="flex items-center justify-between mb-4">
+                                <h2
+                                    class="text-xs font-bold tracking-wider text-slate-600 uppercase flex items-center gap-2">
+                                    <i class="fa-solid fa-newspaper text-blue-500"></i> Notícias em Tempo Real
+                                </h2>
+                                <span id="tag-perfil-atual"
+                                    class="text-xs font-semibold px-2.5 py-1 bg-slate-100 rounded-lg text-slate-600">---</span>
+                            </div>
+                            <div id="lista-noticias" class="space-y-3">
+                                <p class="text-sm text-slate-400">Carregando notícias...</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- ANÁLISE IA + ASSISTENTE DE INVESTIMENTO -->
+                    <div class="space-y-6">
+
+                        <!-- RESUMO DA IA -->
+                        <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200/80">
+                            <h2
+                                class="text-xs font-bold tracking-wider text-slate-600 uppercase mb-3 flex items-center gap-2">
+                                <i class="fa-solid fa-wand-magic-sparkles text-amber-500"></i> Análise de Mercado (IA)
+                            </h2>
+                            <div id="painel-analise-ia" class="space-y-3 text-sm">
+                                <p class="text-slate-400">Analisando notícias...</p>
+                            </div>
+                        </div>
+
+                        <!-- CHAT COM IA DE INVESTIMENTOS -->
+                        <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200/80 flex flex-col h-80">
+                            <h2
+                                class="text-xs font-bold tracking-wider text-slate-600 uppercase mb-2 flex items-center gap-2">
+                                <i class="fa-solid fa-comments text-emerald-500"></i> Tira-Dúvidas de Investimento
+                            </h2>
+                            <div id="chat-historico"
+                                class="flex-1 overflow-y-auto space-y-2 text-xs p-2 bg-slate-50 rounded-xl mb-3 border border-slate-100">
+                                <div class="p-2 bg-emerald-100 text-emerald-800 rounded-lg">
+                                    Olá! Pode me fazer perguntas sobre o mercado ou tirar dúvidas sobre o seu perfil.
+                                </div>
+                            </div>
+                            <form onsubmit="enviarPergunta(event)" class="flex gap-2">
+                                <input type="text" id="chat-input" placeholder="Ex: Vale a pena CDB hoje?"
+                                    class="flex-1 text-xs px-3 py-2 bg-slate-100 border border-slate-200 rounded-xl focus:outline-none focus:border-emerald-500"
+                                    required>
+                                <button type="submit"
+                                    class="px-3 py-2 bg-emerald-600 text-white rounded-xl text-xs font-bold hover:bg-emerald-500">Enviar</button>
+                            </form>
+                        </div>
+
+                    </div>
+
+                </div>
+            <!-- MOVIMENTAÇÕES DE INVESTIMENTO -->
+            <div class="bg-white p-5 rounded-2xl shadow-sm border border-slate-200/80">
+                <h2 class="text-xs font-bold tracking-wider text-slate-600 uppercase mb-4">
+                    Movimentações de Investimento
+                </h2>
+            
+                <div id="movimentos-investimento">
+                    Carregando...
+                </div>
+            </div>    
+
+            </div>
+        </main>
+    </div>
+
+    <script>
+        let perfilAtual = 'moderado';
+
+        // Escapa texto vindo de notícias / IA / usuário antes de colocar em innerHTML
+        function esc(t) {
+            const d = document.createElement('div');
+            d.textContent = t == null ? '' : String(t);
+            return d.innerHTML;
+        }
+
+        function toggleSidebar() {
+            document.getElementById('sidebar').classList.toggle('-translate-x-full');
+            document.getElementById('sidebar-backdrop').classList.toggle('hidden');
+        }
+
+        async function carregarIndicadores() {
+            try {
+                const res = await fetch('/api/investimentos/indicadores');
+                const data = await res.json();
+                const container = document.getElementById('indicadores-container');
+                container.innerHTML = data.indicadores.map(i => `
+                    <div class="bg-white p-3 rounded-2xl border border-slate-200 text-center shadow-sm">
+                        <span class="text-xs text-slate-400">${i.emoji} ${i.nome}</span>
+                        <p class="font-bold text-slate-800 text-sm mt-0.5">${i.valor}</p>
+                        ${i.variacao !== null ? `<span class="text-[10px] font-bold ${i.variacao >= 0 ? 'text-emerald-600' : 'text-red-500'}">${i.variacao >= 0 ? '+' : ''}${i.variacao}%</span>` : ''}
+                    </div>
+                `).join('');
+            } catch (e) { }
+        }
+
+        async function selecionarPerfil(perfil, salvar = true) {
+            perfilAtual = perfil;
+            document.querySelectorAll('#botoes-perfil button').forEach(b => b.classList.remove('ring-2', 'ring-blue-500', 'bg-slate-50'));
+            document.getElementById(`btn-${perfil}`).classList.add('ring-2', 'ring-blue-500', 'bg-slate-50');
+            document.getElementById('tag-perfil-atual').textContent = perfil.toUpperCase();
+
+            // Grava perfil no banco (só quando o usuário clica; na abertura da página só lê)
+            if (salvar) {
+                fetch('/api/investimentos/perfil', {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ perfil })
+                });
+            }
+
+            carregarNoticias();
+            carregarAnaliseIA();
+        }
+
+        async function carregarNoticias() {
+            const el = document.getElementById('lista-noticias');
+            el.innerHTML = '<p class="text-sm text-slate-400">Buscando notícias em tempo real...</p>';
+            try {
+                const res = await fetch(`/api/investimentos/noticias?perfil=${perfilAtual}`);
+                const data = await res.json();
+                if (!data.noticias || data.noticias.length === 0) {
+                    el.innerHTML = '<p class="text-sm text-slate-400">Nenhuma notícia encontrada no momento.</p>';
+                    return;
+                }
+                el.innerHTML = data.noticias.map(n => `
+                    <div class="p-3 bg-slate-50 rounded-xl hover:bg-slate-100 transition border border-slate-100">
+                        <a href="${esc(n.link)}" target="_blank" rel="noopener noreferrer" class="font-semibold text-slate-800 hover:text-blue-600 text-sm block">${esc(n.titulo)}</a>
+                        <span class="text-[11px] text-slate-400 mt-1 block">${esc(n.fonte)} • ${esc(n.quando)}</span>
+                    </div>
+                `).join('');
+            } catch (e) {
+                el.innerHTML = '<p class="text-sm text-red-500">Erro ao carregar notícias.</p>';
+            }
+        }
+
+        async function carregarAnaliseIA() {
+            const el = document.getElementById('painel-analise-ia');
+            el.innerHTML = '<p class="text-slate-400">Gerando síntese com inteligência artificial...</p>';
+            try {
+                const res = await fetch(`/api/investimentos/analise?perfil=${perfilAtual}`);
+                const data = await res.json();
+                const a = data.analise;
+                el.innerHTML = `
+                    <p class="text-slate-700 leading-relaxed">${esc(a.resumo)}</p>
+                    <div class="p-2.5 rounded-xl ${a.nivel_risco === 'baixo' ? 'bg-emerald-50 text-emerald-800' : 'bg-amber-50 text-amber-800'} text-xs font-semibold">
+                        Risco Atual: ${esc(a.nivel_risco.toUpperCase())} - ${esc(a.justificativa_risco)}
+                    </div>
+                    ${a.empresas_em_crescimento.length ? `
+                        <div class="mt-2">
+                            <span class="text-xs font-bold text-slate-500 uppercase">Empresas / Ativos em destaque:</span>
+                            <ul class="list-disc pl-4 text-xs text-slate-600 mt-1">
+                                ${a.empresas_em_crescimento.map(e => `<li><b>${esc(e.nome)}:</b> ${esc(e.motivo)}</li>`).join('')}
+                            </ul>
+                        </div>
+                    ` : ''}
+                `;
+            } catch (e) {
+                el.innerHTML = '<p class="text-xs text-red-500">Análise indisponível no momento.</p>';
+            }
+        }
+
+        async function enviarPergunta(e) {
+            e.preventDefault();
+            const input = document.getElementById('chat-input');
+            const pergunta = input.value.trim();
+            if (!pergunta) return;
+
+            const chat = document.getElementById('chat-historico');
+            chat.innerHTML += `<div class="p-2 bg-blue-100 text-blue-900 rounded-lg text-right font-medium">${esc(pergunta)}</div>`;
+            input.value = '';
+            chat.scrollTop = chat.scrollHeight;
+
+            try {
+                const res = await fetch('/api/investimentos/perguntar', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ perfil: perfilAtual, pergunta })
+                });
+                const data = await res.json();
+                chat.innerHTML += `<div class="p-2 bg-slate-200 text-slate-800 rounded-lg whitespace-pre-line leading-relaxed">${esc(data.resposta || data.erro || 'Sem resposta.')}</div>`;
+                chat.scrollTop = chat.scrollHeight;
+            } catch (err) {
+                chat.innerHTML += `<div class="p-2 bg-red-100 text-red-800 rounded-lg">Erro ao obter resposta.</div>`;
+            }
+        }
+        async function carregarMovimentosInvestimento() {
+            const el = document.getElementById('movimentos-investimento');
+
+            try {
+                const res = await fetch('/api/investimentos/movimentos');
+                if (res.status === 401) { window.location.href = '/login'; return; }
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.erro || `Erro ${res.status}`);
+
+                // Verifica se 'movimentos' existe e se tem itens
+                if (!data.movimentos || !data.movimentos.length) {
+                    el.innerHTML = '<p>Nenhuma movimentação cadastrada.</p>';
+                    return;
+                }
+
+                el.innerHTML = data.movimentos.map(m => `
+                    <div class="flex justify-between border-b py-2">
+                        <div>
+                            <strong>${esc(m.descricao || 'Investimento')}</strong><br>
+                            <small>${esc(m.data)}</small>
+                        </div>
+                        
+                        <div class="${m.tipo === 'entrada' ? 'text-emerald-600' : 'text-red-500'}">
+                            ${m.tipo === 'entrada' ? '+' : '-'} 
+                            R$ ${Number(m.valor).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                        </div>
+                    </div>
+                `).join('');
+
+            } catch (erro) {
+                console.error("Erro ao carregar movimentos:", erro);
+                el.innerHTML = '<p>Erro ao carregar movimentações.</p>';
+            }
+        }
+
+        // Inicialização
+        carregarIndicadores();
+        carregarMovimentosInvestimento();
+        // Usa o perfil já salvo (antes, abrir a página sobrescrevia o perfil com "moderado")
+        fetch('/api/investimentos/perfil')
+            .then(r => r.ok ? r.json() : {})
+            .catch(() => ({}))
+            .then(d => selecionarPerfil(d.perfil || 'moderado', false));
+    </script>
+</body>
+
+</html>

@@ -2,7 +2,7 @@
 function toggleSidebar() {
     const sidebar = document.getElementById('sidebar');
     const backdrop = document.getElementById('sidebar-backdrop');
-    
+
     if (sidebar.classList.contains('-translate-x-full')) {
         sidebar.classList.remove('-translate-x-full');
         backdrop.classList.remove('hidden');
@@ -23,13 +23,13 @@ document.addEventListener('DOMContentLoaded', async function () {
     initCategoryChart();
     initBudgetChart();
     initBalanceChart();
-    
+
     // Define o mês atual por padrão no input (Ex: "2026-09")
     const hoje = new Date();
     const ano = hoje.getFullYear();
     const mes = String(hoje.getMonth() + 1).padStart(2, '0');
     const mesAtualFormatado = `${ano}-${mes}`;
-    
+
     const inputMes = document.getElementById('filtro-mes');
     if (inputMes) {
         inputMes.value = mesAtualFormatado;
@@ -76,7 +76,7 @@ async function aoMudarMes(mesSelecionado) {
 // Busca e atualiza os dados do Dashboard
 async function carregarDadosDashboard(usuarioId, mesFiltro = null) {
     try {
-        let url = `/api/dados-dashboard/${usuarioId}`;
+        let url = `/api/dados-dashboard`;
         if (mesFiltro) {
             url += `?mes=${mesFiltro}`;
         }
@@ -146,10 +146,14 @@ async function carregarDadosDashboard(usuarioId, mesFiltro = null) {
 
         // 5. ATUALIZAÇÃO DO GRÁFICO DE EVOLUÇÃO DO SALDO
         if (balanceChartInstance && dados.totais) {
-            const valoresEvolucao = (dados.evolucao && dados.evolucao.valores && dados.evolucao.valores.length > 0) 
-                ? dados.evolucao.valores 
+            const valoresEvolucao = (dados.evolucao && dados.evolucao.valores && dados.evolucao.valores.length > 0)
+                ? dados.evolucao.valores
                 : [0, 0, 0, 0, 0, dados.totais.saldo];
 
+            // meses vindos do servidor (terminam no mês selecionado); sem eles, mantém os últimos 6 meses
+            if (dados.evolucao && dados.evolucao.labels && dados.evolucao.labels.length === valoresEvolucao.length) {
+                balanceChartInstance.data.labels = dados.evolucao.labels;
+            }
             balanceChartInstance.data.datasets[0].data = valoresEvolucao;
             balanceChartInstance.update();
         }
@@ -158,7 +162,7 @@ async function carregarDadosDashboard(usuarioId, mesFiltro = null) {
         if (dados.totais) {
             const renda = dados.totais.renda || 0;
             const despesa = dados.totais.despesa || 0;
-            
+
             if (!possuiDados || renda === 0) {
                 updateAIAlerts(0, true, "Sem dados de renda suficientes para calcular o risco neste mês.");
             } else {
@@ -191,7 +195,34 @@ async function carregarDadosDashboard(usuarioId, mesFiltro = null) {
         if (dados.chatbot) {
             atualizarStatusChatbot(dados.chatbot.ultima_atividade, dados.chatbot.vinculado);
         }
-
+        if (dados.investimentos) {
+            const totalInv =
+                dados.investimentos.total || 0;
+            const entradasInv =
+                dados.investimentos.entradas || 0;
+            const saidasInv =
+                dados.investimentos.saidas || 0;
+            const cardInv =
+                document.getElementById('total-investimentos');
+            const resumoInv =
+                document.getElementById('investimentos-resumo');
+            if (cardInv) {
+                cardInv.textContent =
+                    totalInv.toLocaleString(
+                        'pt-BR',
+                        {
+                            style: 'currency',
+                            currency: 'BRL'
+                        }
+                    );
+            }
+            if (resumoInv) {
+                resumoInv.textContent =
+                    `Entradas: ${entradasInv.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+                    } • Saídas: ${saidasInv.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+                    }`;
+            }
+        }
     } catch (erro) {
         console.error("Erro ao carregar dados do banco:", erro);
         setUserName("Erro ao carregar");
@@ -321,7 +352,7 @@ function initBalanceChart() {
     const canvas = document.getElementById('balanceChart');
     if (!canvas) return;
     const ctx = canvas.getContext('2d');
-    
+
     const gradient = ctx.createLinearGradient(0, 0, 0, 300);
     gradient.addColorStop(0, 'rgba(59, 130, 246, 0.4)');
     gradient.addColorStop(1, 'rgba(59, 130, 246, 0.0)');
@@ -344,8 +375,8 @@ function initBalanceChart() {
                 pointBackgroundColor: '#2563eb'
             }]
         },
-        options: { 
-            responsive: true, 
+        options: {
+            responsive: true,
             maintainAspectRatio: false,
             scales: {
                 x: { grid: { display: false } },

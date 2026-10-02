@@ -4,10 +4,11 @@ import re
 import psycopg2
 from groq import Groq
 from dotenv import load_dotenv
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
+    CallbackQueryHandler,
     MessageHandler,
     filters,
     ContextTypes,
@@ -15,7 +16,7 @@ from telegram.ext import (
 from werkzeug.security import generate_password_hash, check_password_hash
 
 # IMPORTAÇÕES PARA O FLASK, SESSÃO E E-MAIL
-from flask import Flask, render_template, request, jsonify, session, redirect, url_for
+from flask import Flask, Response, render_template, request, jsonify, session, redirect, url_for
 from flask_cors import CORS
 import threading 
 from flask_mail import Mail, Message
@@ -31,15 +32,44 @@ import calendar
 import math
 import csv
 import io
-import unicodedata
+import secrets
+from urllib.parse import urlparse
+
+import investimentos
+from html import escape as escapar_html
+from utils import fmt_brl, limpar_resposta_ia, limpar_telefone, normalizar
 
 # Carrega as variáveis de ambiente (.env)
 load_dotenv()
 
 # Inicializa a aplicação Flask
 app_web = Flask(__name__)
-app_web.secret_key = os.getenv("FLASK_SECRET_KEY", "fincash_secret_key_12345")
-CORS(app_web)
+_secret = os.getenv("FLASK_SECRET_KEY")
+if not _secret:
+    # Sem chave no .env: usa uma aleatória (as sessões caem a cada reinício) em vez de uma chave pública fixa.
+    print("⚠ FLASK_SECRET_KEY não definida no .env: usando chave temporária. Defina uma chave fixa em produção.")
+    _secret = secrets.token_hex(32)
+app_web.secret_key = _secret
+app_web.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE='Lax',                                   # navegador não envia o cookie em POST de outros sites
+    SESSION_COOKIE_SECURE=os.getenv("COOKIE_SECURE", "0") == "1",    # defina COOKIE_SECURE=1 quando usar HTTPS
+)
+
+# O site é servido pelo próprio Flask (mesma origem): CORS só é ligado se você listar origens no .env
+_cors_origins = [o.strip() for o in os.getenv("CORS_ORIGINS", "").split(",") if o.strip()]
+if _cors_origins:
+    CORS(app_web, origins=_cors_origins)
+
+
+@app_web.before_request
+def bloquear_origem_estranha():
+    """Proteção extra contra CSRF: requisições que alteram dados só valem se vierem do próprio site."""
+    if request.method in ('POST', 'PUT', 'PATCH', 'DELETE'):
+        origem = request.headers.get('Origin')
+        if origem and urlparse(origem).netloc != request.host and origem not in _cors_origins:
+            return jsonify({"erro": "Origem não permitida."}), 403
+
 
 # CONFIGURAÇÕES DE E-MAIL:
 app_web.config['MAIL_SERVER'] = 'smtp.gmail.com'
@@ -55,6 +85,7 @@ mail = Mail(app_web)
 # E-MAILS: BOAS-VINDAS, AVISO AO SUPORTE E DETECÇÃO DE E-MAIL INVÁLIDO
 # ==========================================
 SUPORTE_EMAIL = os.getenv('SUPORTE_EMAIL', app_web.config['MAIL_USERNAME'])
+SAC_EMAIL = os.getenv('SAC_EMAIL') or SUPORTE_EMAIL   # e-mail exibido aos usuários (defina SAC_EMAIL no .env)
 
 
 def montar_email_boas_vindas(nome, email, telefone):
@@ -74,7 +105,7 @@ def montar_email_boas_vindas(nome, email, telefone):
             <p style="margin: 0; font-size: 14px; color: #475569;">
                 ⚠️ <strong>Caso não tenha sido você:</strong><br>
                 Entre em contato com nosso SAC através do e-mail:
-                <a href="mailto:123@fincash.com" style="color: #ef4444; font-weight: bold;">123@fincash.com</a>
+                <a href="mailto:{SAC_EMAIL}" style="color: #ef4444; font-weight: bold;">{SAC_EMAIL}</a>
             </p>
         </div>
     </div>
@@ -242,7 +273,7 @@ def criar_tabelas():
             id SERIAL PRIMARY KEY,
             telegram_id TEXT REFERENCES users(telegram_id),
             tipo VARCHAR(10) NOT NULL,
-            valor NUMERIC(10, 2) NOT NULL,
+            valor NUMERIC(12, 2) NOT NULL,
             categoria VARCHAR(50),
             descricao TEXT,
             data TIMESTAMP DEFAULT CURRENT_TIMESTAMP  -- Alterado de DATE para TIMESTAMP
@@ -283,7 +314,7 @@ def criar_tabelas():
             id_original INT NOT NULL,
             telegram_id TEXT,
             tipo VARCHAR(10) NOT NULL,
-            valor NUMERIC(10, 2) NOT NULL,
+            valor NUMERIC(12, 2) NOT NULL,
             categoria VARCHAR(50),
             descricao TEXT,
             data TIMESTAMP,
@@ -343,6 +374,26 @@ def criar_tabelas():
             atualizado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         """)
+
+        # Investimentos: cada aporte ('entrada') / resgate ('saida') é um movimento
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS investments (
+            id SERIAL PRIMARY KEY,
+            telegram_id TEXT NOT NULL,
+            tipo VARCHAR(10) NOT NULL CHECK (tipo IN ('entrada', 'saida')),
+            valor NUMERIC(12, 2) NOT NULL CHECK (valor > 0),
+            descricao TEXT,
+            data TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """)
+        cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_investments_tg
+        ON investments(telegram_id, data);
+        """)
+
+        # Bancos antigos: alarga o valor monetário para NUMERIC(12,2) (igual às demais tabelas)
+        cursor.execute("ALTER TABLE transactions ALTER COLUMN valor TYPE NUMERIC(12, 2);")
+        cursor.execute("ALTER TABLE transactions_backup ALTER COLUMN valor TYPE NUMERIC(12, 2);")
 
         conexao.commit()
         print("Tabelas e índices sincronizados com sucesso!")
@@ -461,8 +512,6 @@ def api_transacoes():
 # ==========================================
 # ORÇAMENTOS, POUPANÇA E RELATÓRIOS
 # ==========================================
-from flask import Response
-
 CATEGORIAS_DESPESA = ["Alimentação", "Carro", "Internet", "Moradia", "Lazer", "Outros"]
 # Despesas FIXAS (todas as outras contam como variáveis no relatório). Ajuste ao seu uso.
 CATEGORIAS_FIXAS = {"moradia", "internet"}
@@ -484,9 +533,40 @@ PADRAO_VER_POUPANCA = re.compile(
     r'quanto (?:eu )?(?:tenho|guardei) (?:na|de|em) (?:minha )?poupan[çc]a)\??$')
 
 
-def fmt_brl(valor) -> str:
-    texto = f"{float(valor):,.2f}"
-    return "R$ " + texto.replace(",", "X").replace(".", ",").replace("X", ".")
+# Mensagens do Telegram para registrar investimentos: "investi 500 em CDB" / "resgatei 200 do CDB"
+PADRAO_INVESTIR = re.compile(
+    r'^(?:investi|investir|aportei|aportar)\s+(?:r\$\s*)?(\d[\d.,]*)(?:\s*reais)?\s*(?:(?:em|no|na|nos|nas|de)\s+)?(.*)$')
+PADRAO_RESGATAR_INV = re.compile(
+    r'^(?:resgatei|resgatar)\s+(?:r\$\s*)?(\d[\d.,]*)(?:\s*reais)?\s*(?:(?:de|do|da|dos|das|em)\s+)?(.*)$')
+
+# Outras formas de falar a mesma coisa: "apliquei 500 em investimentos", "aporte de 500",
+# "500 em investimentos", "retirei 200 dos investimentos". Todas vão para a tabela investments (não para transactions).
+_VALOR_MSG = r'(?:r\$\s*)?(\d[\d.,]*)(?:\s*reais)?'
+_DEST_INVESTIMENTOS = r'(?:meus?\s+)?investimentos?'
+PADRAO_APLICAR_EM_INVESTIMENTOS = re.compile(
+    r'^(?:aplicar|apliquei|colocar|coloquei|botar|botei|depositar|depositei|adicionar|adicionei|'
+    r'mandar|mandei|enviar|enviei|passar|passei)\s+' + _VALOR_MSG +
+    r'\s+(?:em|no|nos|para os?|pra os?|para|pra)\s+' + _DEST_INVESTIMENTOS + r'\s*(.*)$')
+PADRAO_APORTE = re.compile(
+    r'^(?:aporte|investimento)\s+(?:de\s+)?' + _VALOR_MSG + r'\s*(?:(?:em|no|na|nos|nas|de)\s+)?(.*)$')
+PADRAO_VALOR_EM_INVESTIMENTOS = re.compile(
+    r'^' + _VALOR_MSG + r'\s+(?:em|no|nos|de)\s+' + _DEST_INVESTIMENTOS + r'\s*(.*)$')
+PADRAO_RESGATAR_DOS_INVESTIMENTOS = re.compile(
+    r'^(?:resgatar|resgatei|sacar|saquei|retirar|retirei|tirar|tirei)\s+' + _VALOR_MSG +
+    r'\s+(?:de|do|dos|da|das|em)\s+' + _DEST_INVESTIMENTOS + r'\s*(.*)$')
+
+
+def interpretar_movimento_investimento(texto_lower):
+    """Se a mensagem for aporte/resgate de investimento devolve (tipo, valor_txt, descricao); senão None."""
+    for padrao in (PADRAO_INVESTIR, PADRAO_APLICAR_EM_INVESTIMENTOS, PADRAO_APORTE, PADRAO_VALOR_EM_INVESTIMENTOS):
+        m = padrao.match(texto_lower)
+        if m:
+            return 'entrada', m.group(1), m.group(2)
+    for padrao in (PADRAO_RESGATAR_INV, PADRAO_RESGATAR_DOS_INVESTIMENTOS):
+        m = padrao.match(texto_lower)
+        if m:
+            return 'saida', m.group(1), m.group(2)
+    return None
 
 
 def parse_valor_br(texto):
@@ -1092,17 +1172,45 @@ def login_page():
     return render_template('login.html')
 
 # 3. API Login
+_TENTATIVAS_LOGIN = {}          # chave -> horários das falhas recentes
+_LOGIN_MAX_FALHAS = 8
+_LOGIN_JANELA_SEG = 300
+_login_lock = threading.Lock()
+
+
+def _login_bloqueado(chave) -> bool:
+    agora = time.time()
+    with _login_lock:
+        falhas = [t for t in _TENTATIVAS_LOGIN.get(chave, []) if agora - t < _LOGIN_JANELA_SEG]
+        _TENTATIVAS_LOGIN[chave] = falhas
+        return len(falhas) >= _LOGIN_MAX_FALHAS
+
+
+def _login_falhou(chave):
+    with _login_lock:
+        _TENTATIVAS_LOGIN.setdefault(chave, []).append(time.time())
+
+
+def _login_ok(chave):
+    with _login_lock:
+        _TENTATIVAS_LOGIN.pop(chave, None)
+
+
 @app_web.route('/api/login', methods=['POST'])
 def handle_login():
-    dados = request.get_json() or {}
+    dados = request.get_json(silent=True) or {}
     identifier = str(dados.get('identifier', '')).strip()
     password = str(dados.get('password', '')).strip()
 
     if not identifier or not password:
         return jsonify({"erro": "Informe seu telefone ou e-mail e a senha."}), 400
 
+    chave_login = f"{request.remote_addr}|{identifier.lower()}"
+    if _login_bloqueado(chave_login):
+        return jsonify({"erro": "Muitas tentativas. Aguarde alguns minutos e tente de novo."}), 429
+
     # Telefone digitado com máscara "(11) 99999-9999" vira "11999999999" (igual ao cadastro)
-    telefone_limpo = identifier.replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
+    telefone_limpo = limpar_telefone(identifier)
 
     conexao = obter_conexao()
     cursor = conexao.cursor()
@@ -1125,11 +1233,12 @@ def handle_login():
             session['telegram_id'] = db_telegram_id
             session['user_id'] = db_user_id
             session['user_name'] = db_nome
+            _login_ok(chave_login)
             return jsonify({"sucesso": True, "mensagem": "Login efetuado!"})
-        else:
-            return jsonify({"erro": "Senha incorreta."}), 401
-    else:
-        return jsonify({"erro": "Usuário não encontrado."}), 404
+        _login_falhou(chave_login)
+        return jsonify({"erro": "Senha incorreta."}), 401
+    _login_falhou(chave_login)
+    return jsonify({"erro": "Usuário não encontrado."}), 404
 
 # 4. API Cadastro
 @app_web.route('/api/cadastrar', methods=['POST'])
@@ -1137,7 +1246,7 @@ def handle_register():
     dados = request.get_json() or {}
     nome = str(dados.get('name', '')).strip()
     email = str(dados.get('email', '')).strip()
-    telefone = str(dados.get('phone', '')).replace(" ", "").replace("-", "").replace("(", "").replace(")", "").strip()
+    telefone = limpar_telefone(dados.get('phone', ''))
     password = str(dados.get('password', '')).strip()
 
     # 1. Validações básicas
@@ -1168,7 +1277,9 @@ def handle_register():
         conexao.commit()
     except Exception as e:
         conexao.rollback()
-        return jsonify({"erro": f"Erro de banco de dados: {e}"}), 500
+        print(f"❌ Erro no cadastro: {e}")
+        traceback.print_exc()
+        return jsonify({"erro": "Não foi possível criar a conta agora. Tente novamente em instantes."}), 500
     finally:
         cursor.close()
         conexao.close()
@@ -1256,9 +1367,6 @@ def perfil_page():
         session.clear()
         return redirect(url_for('login_page'))
     return render_template('perfil.html')
-
-def limpar_telefone(valor):
-    return str(valor).replace(" ", "").replace("-", "").replace("(", "").replace(")", "").strip()
 
 # 4.4 API: dados do perfil
 @app_web.route('/api/perfil', methods=['GET'])
@@ -1519,8 +1627,8 @@ def datas_com_transacoes():
     return jsonify(datas)
 
 # 9. API: Dados do Dashboard
-@app_web.route('/api/dados-dashboard/<telegram_id>', methods=['GET'])
-def obter_dados_dashboard(telegram_id):
+@app_web.route('/api/dados-dashboard', methods=['GET'])
+def obter_dados_dashboard():
     try:
         # Só quem está logado vê dados (antes, qualquer ID na URL era aceito sem sessão)
         if 'telegram_id' not in session:
@@ -1548,7 +1656,7 @@ def obter_dados_dashboard(telegram_id):
                 COALESCE(SUM(CASE WHEN tipo = 'renda' THEN valor ELSE 0 END), 0) AS total_renda,
                 COALESCE(SUM(CASE WHEN tipo = 'despesa' THEN valor ELSE 0 END), 0) AS total_despesas
             FROM transactions 
-            WHERE telegram_id = %s {condicao_data};
+            WHERE TRIM(telegram_id) = %s {condicao_data};
         """
         cursor.execute(query_totais, params_base)
         row_totais = cursor.fetchone()
@@ -1565,7 +1673,7 @@ def obter_dados_dashboard(telegram_id):
                 COALESCE(SUM(CASE WHEN tipo = 'deposito' THEN valor ELSE 0 END), 0),
                 COALESCE(SUM(CASE WHEN tipo = 'saque' THEN valor ELSE 0 END), 0)
             FROM savings_movements
-            WHERE telegram_id = %s {condicao_data};
+            WHERE TRIM(telegram_id) = %s {condicao_data};
         """, params_base)
         row_poup = cursor.fetchone()
         depositos_periodo = float(row_poup[0]) if row_poup else 0.0
@@ -1583,7 +1691,7 @@ def obter_dados_dashboard(telegram_id):
         query_categorias = f"""
             SELECT categoria, SUM(valor) 
             FROM transactions 
-            WHERE telegram_id = %s AND tipo = 'despesa' {condicao_data}
+            WHERE TRIM(telegram_id) = %s AND tipo = 'despesa' {condicao_data}
             GROUP BY categoria;
         """
         cursor.execute(query_categorias, params_base)
@@ -1603,11 +1711,66 @@ def obter_dados_dashboard(telegram_id):
         query_ultima_atividade = f"""
             SELECT TO_CHAR(MAX(data), 'DD/MM/YYYY HH24:MI') 
             FROM transactions 
-            WHERE telegram_id = %s {condicao_data};
+            WHERE TRIM(telegram_id) = %s {condicao_data};
         """
         cursor.execute(query_ultima_atividade, params_base)
         last_row = cursor.fetchone()
         ultima_atividade = last_row[0] if last_row and last_row[0] else None
+
+        # Investimentos (acumulado de sempre, como a poupança).
+        # Fica ANTES do close() e isolado: se falhar, o resto do dashboard continua funcionando.
+        invest_entradas = invest_saidas = 0.0
+        try:
+            cursor.execute("""
+                SELECT
+                    COALESCE(SUM(CASE WHEN tipo = 'entrada' THEN valor ELSE 0 END), 0),
+                    COALESCE(SUM(CASE WHEN tipo = 'saida' THEN valor ELSE 0 END), 0)
+                FROM investments
+                WHERE TRIM(telegram_id) = %s;
+            """, (telegram_id,))
+            row_inv = cursor.fetchone()
+            invest_entradas = float(row_inv[0] or 0)
+            invest_saidas = float(row_inv[1] or 0)
+        except Exception as e:
+            conexao.rollback()
+            print(f"Aviso: investimentos indisponíveis no dashboard: {e}")
+        total_investimentos = invest_entradas - invest_saidas
+
+        # Evolução do saldo: saldo acumulado ao fim de cada um dos 6 últimos meses (termina no mês filtrado).
+        # Mesma regra do card de saldo: receitas - despesas - poupança líquida. Isolado: se falhar, o resto segue.
+        evolucao = None
+        try:
+            mes_fim = validar_mes(mes_filtro) or datetime.now().strftime('%Y-%m')
+            meses_ev = [deslocar_mes(mes_fim, -i) for i in range(5, -1, -1)]
+            cursor.execute("""
+                SELECT TO_CHAR(data, 'YYYY-MM'),
+                       COALESCE(SUM(CASE WHEN tipo = 'renda' THEN valor ELSE 0 END), 0)
+                     - COALESCE(SUM(CASE WHEN tipo = 'despesa' THEN valor ELSE 0 END), 0)
+                FROM transactions
+                WHERE TRIM(telegram_id) = %s AND data IS NOT NULL
+                GROUP BY 1;
+            """, (telegram_id,))
+            liquido_mes = {k: float(v) for k, v in cursor.fetchall()}
+            cursor.execute("""
+                SELECT TO_CHAR(data, 'YYYY-MM'),
+                       COALESCE(SUM(CASE WHEN tipo = 'deposito' THEN valor ELSE 0 END), 0)
+                     - COALESCE(SUM(CASE WHEN tipo = 'saque' THEN valor ELSE 0 END), 0)
+                FROM savings_movements
+                WHERE TRIM(telegram_id) = %s AND data IS NOT NULL
+                GROUP BY 1;
+            """, (telegram_id,))
+            for k, v in cursor.fetchall():
+                liquido_mes[k] = liquido_mes.get(k, 0.0) - float(v)
+            acumulado_ev = sum(v for k, v in liquido_mes.items() if k < meses_ev[0])
+            evolucao = {"labels": [], "valores": []}
+            for k in meses_ev:
+                acumulado_ev += liquido_mes.get(k, 0.0)
+                evolucao["labels"].append(rotulo_mes(k))
+                evolucao["valores"].append(round(acumulado_ev, 2))
+        except Exception as e:
+            conexao.rollback()
+            evolucao = None
+            print(f"Aviso: evolução do saldo indisponível no dashboard: {e}")
 
         cursor.close()
         conexao.close()
@@ -1631,12 +1794,20 @@ def obter_dados_dashboard(telegram_id):
             "chatbot": {
                 "ultima_atividade": ultima_atividade,
                 "vinculado": bool(vinculado)
-            }
+            },
+            "investimentos": {
+                "entradas": invest_entradas,
+                "saidas": invest_saidas,
+                "total": total_investimentos
+            },
+            "evolucao": evolucao
+
         })
 
     except Exception as e:
         print(f"Erro interno no servidor (dados-dashboard): {e}")
-        return jsonify({"erro": str(e)}), 500
+        traceback.print_exc()
+        return jsonify({"erro": "Erro interno ao carregar o dashboard."}), 500
             
 def rodar_flask():
     """Roda o servidor web na porta 5000"""
@@ -1663,17 +1834,31 @@ def interpretar_mensagem_financeira(texto_usuario: str, telegram_id=None) -> dic
     - {cats_renda}.
 
     REGRAS DE CATEGORIA:
-    - Escolha SEMPRE uma categoria da lista quando ela servir.
-    - Use "Outros" (despesa) ou "Outras Rendas" (renda) só se o lançamento for genérico demais.
-    - Se for algo claro que não cabe em nenhuma categoria da lista (ex.: veterinário, academia),
-      sugira em "categoria" um nome novo, curto (1 a 2 palavras).
+    - Escolha SEMPRE uma categoria da lista quando ela servir de verdade.
+    - "Outros" (despesa) e "Outras Rendas" (renda) são o ÚLTIMO recurso: só para itens impossíveis de classificar
+      (ex.: "coisas", "diversos"). Qualquer item concreto que não se encaixe na lista (ex.: computador, celular,
+      presente, roupa, veterinário, academia) deve receber em "categoria" um NOME NOVO, curto (1 a 2 palavras),
+      como "Eletrônicos", "Vestuário", "Pets", "Saúde".
+    - Em "categoria_sugerida" coloque SEMPRE o nome específico e curto que você daria a este item
+      (ex.: computador -> "Eletrônicos"), mesmo quando escolher uma categoria da lista.
+
+    REGRA DE MOVIMENTO (muito importante):
+    - Colocar dinheiro em investimentos (investi, apliquei, aportei, comprei CDB/ações/tesouro/FII/cripto) ou
+      resgatar/tirar de investimentos NÃO é receita nem despesa: use "movimento": "investimento".
+    - Guardar ou sacar da poupança/reserva de emergência também NÃO é receita nem despesa: use "movimento": "poupanca".
+    - Nesses dois casos "direcao" é "entrada" (colocou/guardou/aportou) ou "saida" (resgatou/sacou/retirou).
+    - Rendimentos RECEBIDOS (dividendos, juros, lucro de venda) continuam sendo "renda" normal, com "movimento": "nenhum".
+    - Em todo o resto, use "movimento": "nenhum" e "direcao": "entrada".
 
     Retorne APENAS o JSON no formato:
     {{
         "descricao": "Nome legível do item",
         "valor": 0.00,
         "categoria": "Nome da Categoria",
-        "tipo": "despesa" ou "renda"
+        "categoria_sugerida": "Nome curto e específico",
+        "tipo": "despesa" ou "renda",
+        "movimento": "nenhum" ou "investimento" ou "poupanca",
+        "direcao": "entrada" ou "saida"
     }}
     """
 
@@ -1694,7 +1879,8 @@ def salvar_transacao(telegram_id: str, dados: dict) -> int:
         VALUES (%s, %s, %s, %s, %s)
         RETURNING id;
     """
-    with obter_conexao() as conexao:
+    conexao = obter_conexao()
+    try:
         with conexao.cursor() as cursor:
             cursor.execute(query, (
                 str(telegram_id),
@@ -1704,8 +1890,13 @@ def salvar_transacao(telegram_id: str, dados: dict) -> int:
                 dados["descricao"]
             ))
             novo_id = cursor.fetchone()[0]
-            conexao.commit()
-            return novo_id
+        conexao.commit()
+        return novo_id
+    except Exception:
+        conexao.rollback()
+        raise
+    finally:
+        conexao.close()
 
 def autenticar_e_vincular_telegram(identifier: str, password: str, novo_telegram_id: str) -> tuple[bool, str]:
     """Valida credenciais e vincula o novo Telegram ID."""
@@ -1762,7 +1953,7 @@ async def responder_consultoria(texto_usuario: str) -> str:
     saudacoes = ["olá", "ola", "oi", "oii", "oiii", "bom dia", "boa tarde", "boa noite", "tudo bem", "tudo bem?"]
     if texto_limpo in saudacoes:
         return (
-            "Olá! 👋 Sou o **Fincash**, o seu assistente financeiro pessoal.\n\n"
+            "Olá! 👋 Sou o Fincash, o seu assistente financeiro pessoal.\n\n"
             "Estou aqui para te ajudar a registrar gastos, organizar as suas contas e dar dicas de economia.\n\n"
             "Como posso ajudar hoje? 😊"
         )
@@ -1771,9 +1962,15 @@ async def responder_consultoria(texto_usuario: str) -> str:
     Você é o Fincash, assistente financeiro pessoal.
     Análise a mensagem: "{texto_usuario}"
 
-    1. Se for sobre finanças/economia: responda de forma prática em português com Markdown.
+    1. Se for sobre finanças/economia: responda de forma prática, em português do Brasil.
+       ESTILO (muito importante):
+       - Tom amigável e acolhedor, como uma conversa com um amigo que entende de dinheiro.
+       - No máximo 3 parágrafos curtos (2 a 3 frases cada), com uma LINHA EM BRANCO entre eles.
+       - Sem Markdown: nada de **, #, tabelas ou crases. Use no máximo 1 ou 2 emojis.
+       - Se precisar listar, use linhas começando com "• ", no máximo 4 itens.
+       - Até 700 caracteres.
     2. Se for sobre outro assunto: responda EXATAMENTE:
-       "⚠️ Esta mensagem vai contra as diretrizes do nosso sistema. Caso precise de ajuda ou suporte, entre em contato com nosso SAC através do e-mail: aaa@aaa"
+       "⚠️ Esta mensagem vai contra as diretrizes do nosso sistema. Caso precise de ajuda ou suporte, entre em contato com nosso SAC através do e-mail: {SAC_EMAIL}"
     """
 
     resposta = cliente_groq.chat.completions.create(
@@ -1782,7 +1979,7 @@ async def responder_consultoria(texto_usuario: str) -> str:
         temperature=0.3,
     )
 
-    return resposta.choices[0].message.content.strip()
+    return limpar_resposta_ia(resposta.choices[0].message.content, limite=1200)
 
 async def processar_mensagem(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not update.message:
@@ -1898,6 +2095,15 @@ async def processar_mensagem(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if await tratar_conversa_pendente(update, context, user_id, texto_usuario):
         return
 
+    # Saudação ("oi", "bom dia", /start) e menu principal (/menu). Vem antes do parser de gastos.
+    if await interceptar_saudacao_e_menu(update, context, user_id, texto_usuario):
+        return
+
+    # Módulo de investimentos (menu, "dicas de investimentos", conversa com a IA).
+    # Precisa vir ANTES do parser de gastos, senão a mensagem nunca chega nele.
+    if await investimentos.interceptar_mensagem(update, context, user_id, texto_usuario):
+        return
+
     # Categorias: listar, criar e excluir
     if PADRAO_VER_CATEGORIAS.match(texto_usuario):
         await responder_lista_categorias(update, user_id)
@@ -1933,6 +2139,12 @@ async def processar_mensagem(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await comando_poupanca(update, context)
         return
 
+    # Interceptador de Investimentos (aportar / resgatar) -> tabela investments, igual à poupança com savings_movements
+    mov_inv = interpretar_movimento_investimento(texto_lower)
+    if mov_inv:
+        await responder_movimento_investimento(update, user_id, *mov_inv)
+        return
+
     # Interceptador de Resumo
     termos_resumo = ["quanto eu gastei", "quanto gastei", "quanto eu tenho", "meu saldo", "resumo de gastos", "quanto já gastei"]
     if any(termo in texto_lower for termo in termos_resumo):
@@ -1943,11 +2155,39 @@ async def processar_mensagem(update: Update, context: ContextTypes.DEFAULT_TYPE)
     try:
         dados = interpretar_mensagem_financeira(texto_usuario, user_id)
         if dados.get("valor") and float(dados["valor"]) > 0:
+            # Investimento e poupança são movimentos próprios (tabelas investments / savings_movements),
+            # nunca receita/despesa nem categoria.
+            movimento = str(dados.get("movimento") or "nenhum").strip().lower()
+            if movimento in ("investimento", "poupanca", "poupança"):
+                colocou = str(dados.get("direcao") or "entrada").strip().lower() != "saida"
+                valor_txt = f"{float(dados['valor']):.2f}".replace(".", ",")
+                desc_mov = str(dados.get("descricao") or "")[:200]
+                if movimento == "investimento":
+                    await responder_movimento_investimento(update, user_id, 'entrada' if colocou else 'saida', valor_txt, desc_mov)
+                else:
+                    await responder_movimento_poupanca(update, user_id, 'deposito' if colocou else 'saque', valor_txt, desc_mov)
+                return
+
             dados["valor"] = float(dados["valor"])
             dados["tipo"] = "renda" if dados.get("tipo") == "renda" else "despesa"
             dados["descricao"] = dados.get("descricao") or texto_usuario[:100]
 
             existente = achar_categoria(user_id, dados["tipo"], dados.get("categoria"))
+
+            # A IA caiu em "Outros"/"Outras Rendas", mas deu um nome específico (ex.: computador -> Eletrônicos):
+            # se esse nome já existe, usa; se não existe, trata como categoria nova e PERGUNTA em vez de ir direto.
+            generica = CATEGORIA_GENERICA[dados["tipo"]]
+            if existente and normalizar(existente) == normalizar(generica):
+                sugerida = limpar_nome_categoria(dados.get("categoria_sugerida"))
+                sem_valor = {normalizar(x) for x in ("outros", "outro", "outras rendas", "outra renda", "diversos", "geral", "variados")}
+                if len(sugerida) >= 2 and normalizar(sugerida) not in sem_valor:
+                    ja_existe = achar_categoria(user_id, dados["tipo"], sugerida)
+                    if ja_existe:
+                        existente = ja_existe
+                    else:
+                        existente = None
+                        dados["categoria"] = sugerida
+
             if existente:
                 dados["categoria"] = existente
             else:
@@ -1964,7 +2204,9 @@ async def processar_mensagem(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await salvar_e_responder_lancamento(update, user_id, dados)
             return
     except Exception:
-        pass
+        # Antes era "pass": qualquer falha (Groq fora do ar, banco, JSON ruim) sumia sem rastro.
+        print("⚠ Falha ao interpretar/salvar lançamento; seguindo para a consultoria:")
+        traceback.print_exc()
 
     try:
         await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
@@ -1973,6 +2215,7 @@ async def processar_mensagem(update: Update, context: ContextTypes.DEFAULT_TYPE)
     except Exception as e:
         print(f"Erro no processamento: {e}")
         await update.message.reply_text("❌ Ocorreu um erro ao processar sua solicitação.")
+
 
 async def comando_resumo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
@@ -2035,7 +2278,6 @@ async def comando_deletar(update: Update, context: ContextTypes.DEFAULT_TYPE):
 CATEGORIAS_RENDA = ["Salário", "Freelance", "Investimentos", "Outras Rendas"]
 # Categoria "coringa" de cada tipo: é onde o lançamento cai quando a pessoa escolhe a opção 2
 CATEGORIA_GENERICA = {"despesa": "Outros", "renda": "Outras Rendas"}
-SAC_EMAIL = os.getenv('SAC_EMAIL', 'aaa@aaa')   # troque pelo e-mail real do SAC (ou defina SAC_EMAIL no .env)
 TEMPO_CONVERSA_SEG = 600                         # pergunta sem resposta expira em 10 minutos
 
 AVISO_SEM_DESFAZER = (
@@ -2055,14 +2297,11 @@ RESP_CRIAR = {"1", "um", "criar", "criar categoria", "criar nova", "criar nova c
               "nova", "nova categoria", "quero criar", "sim", "s"}
 RESP_OUTROS = {"2", "dois", "outros", "outro", "outras rendas", "em outros", "colocar em outros",
                "pode ser outros", "nao", "n"}
+RESP_PERSONALIZADA = {"3", "tres", "personalizada", "personalizar", "categoria personalizada", "criar personalizada",
+                      "criar categoria personalizada", "criar uma categoria personalizada", "outro nome",
+                      "escolher nome", "escolher o nome", "quero escolher", "quero personalizar"}
 RESP_SIM = {"sim", "s", "yes", "y", "confirmo", "confirmar", "pode", "pode excluir", "claro", "ok"}
 RESP_NAO = {"nao", "n", "no", "cancelar", "cancela", "cancel", "desistir", "voltar"}
-
-
-def normalizar(texto) -> str:
-    """minúsculas, sem acento e sem espaços repetidos: 'Saúde ' e 'saude' viram a mesma coisa."""
-    texto = unicodedata.normalize('NFKD', str(texto or '')).encode('ascii', 'ignore').decode('ascii')
-    return re.sub(r'\s+', ' ', texto.lower()).strip()
 
 
 def limpar_nome_categoria(texto) -> str:
@@ -2276,8 +2515,9 @@ def montar_pergunta_nova_categoria(nome, dados, tipo):
         f"📌 {md_seguro(dados.get('descricao'))} · {fmt_brl(dados['valor'])}\n\n"
         "O que você prefere?\n"
         f"1️⃣ Criar a categoria *{md_seguro(nome)}*\n"
-        f"2️⃣ Colocar em *{generica}*\n\n"
-        "Responda *1* ou *2* (se preferir, pode escrever \"criar\" ou \"outros\")."
+        f"2️⃣ Colocar em *{generica}*\n"
+        "3️⃣ Criar uma categoria personalizada (você escolhe o nome)\n\n"
+        "Responda *1*, *2* ou *3* (se preferir, pode escrever \"criar\", \"outros\" ou \"personalizada\")."
     )
 
 
@@ -2366,6 +2606,11 @@ async def tratar_conversa_pendente(update: Update, context: ContextTypes.DEFAULT
             if resp in RESP_CANCELAR:
                 context.user_data.pop('conversa', None)
                 await responder("Tudo bem, cancelei. Nenhum lançamento foi registrado. 👍")
+            elif resp in RESP_PERSONALIZADA:
+                # próxima mensagem da pessoa será o nome da categoria
+                _iniciar_conversa(context, 'nome_categoria', dados=dados, tipo=tipo)
+                await responder("✏️ Qual nome você quer dar para a categoria?\n"
+                                "Envie só o nome (ex.: *Pets*). Para desistir, escreva *cancelar*.")
             elif resp in RESP_CRIAR:
                 status, nome = criar_categoria(user_id, tipo, conversa['nome'])
                 dados['categoria'] = nome if status != 'invalida' else CATEGORIA_GENERICA[tipo]
@@ -2379,7 +2624,27 @@ async def tratar_conversa_pendente(update: Update, context: ContextTypes.DEFAULT
                 await salvar_e_responder_lancamento(update, user_id, dados)
             else:
                 await responder("Não entendi 😅 Responda *1* para criar a categoria, *2* para usar "
-                                f"*{CATEGORIA_GENERICA[tipo]}* ou escreva *cancelar*.")
+                                f"*{CATEGORIA_GENERICA[tipo]}*, *3* para escolher outro nome ou escreva *cancelar*.")
+            return True
+
+        if etapa == 'nome_categoria':
+            dados, tipo = conversa['dados'], conversa['tipo']
+            if resp in RESP_CANCELAR:
+                context.user_data.pop('conversa', None)
+                await responder("Tudo bem, cancelei. Nenhum lançamento foi registrado. 👍")
+                return True
+            status, nome = criar_categoria(user_id, tipo, texto)
+            if status == 'invalida':
+                conversa['criado_em'] = time.time()          # renova o prazo e pede de novo
+                await responder("Esse nome não serve 😅 Use pelo menos 2 letras (ex.: *Pets*) ou escreva *cancelar*.")
+                return True
+            dados['categoria'] = nome
+            context.user_data.pop('conversa', None)
+            if status == 'criada':
+                await responder(f"🏷️ Categoria *{md_seguro(nome)}* criada!")
+            else:                                             # 'existe': já havia uma com esse nome, usa ela
+                await responder(f"A categoria *{md_seguro(nome)}* já existe, vou usar ela. 👍")
+            await salvar_e_responder_lancamento(update, user_id, dados)
             return True
 
         if etapa == 'excluir_categoria':
@@ -2552,6 +2817,46 @@ async def responder_movimento_poupanca(update: Update, user_id: str, tipo: str, 
     await update.message.reply_text("\n".join(linhas), parse_mode="Markdown")
 
 
+async def responder_movimento_investimento(update: Update, user_id: str, tipo: str, valor_txt: str, descricao: str = ""):
+    """Registra um aporte ('entrada') ou resgate ('saida') na tabela investments."""
+    valor = parse_valor_br(valor_txt)
+    if not valor:
+        exemplo = "investi 500 em CDB" if tipo == 'entrada' else "resgatei 200 do CDB"
+        await update.message.reply_text(f"❌ Informe um valor válido. Exemplo: `{exemplo}`", parse_mode="Markdown")
+        return
+    if not usuario_esta_vinculado(user_id):
+        await update.message.reply_text("⚠️ Seu Telegram ainda não está vinculado ao **Fincash**. Use `/login <email_ou_telefone> <senha>`.", parse_mode="Markdown")
+        return
+
+    conexao = obter_conexao()
+    try:
+        with conexao.cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO investments (telegram_id, tipo, valor, descricao)
+                VALUES (%s, %s, %s, %s);
+            """, (str(user_id).strip(), tipo, valor, (descricao or "").strip()[:200] or None))
+            cursor.execute("""
+                SELECT COALESCE(SUM(CASE WHEN tipo = 'entrada' THEN valor ELSE -valor END), 0)
+                FROM investments WHERE TRIM(telegram_id) = %s;
+            """, (str(user_id).strip(),))
+            total = float(cursor.fetchone()[0])
+        conexao.commit()
+    except Exception as e:
+        conexao.rollback()
+        print(f"❌ Erro ao registrar investimento: {e}")
+        await update.message.reply_text("❌ Não consegui registrar agora. Tente novamente em instantes.")
+        return
+    finally:
+        conexao.close()
+
+    if tipo == 'entrada':
+        linhas = [f"📈 **Aporte registrado!** +{fmt_brl(valor)} em investimentos."]
+    else:
+        linhas = [f"💸 **Resgate registrado!** -{fmt_brl(valor)} dos investimentos."]
+    linhas.append(f"💼 **Total investido:** {fmt_brl(total)}")
+    await update.message.reply_text("\n".join(linhas), parse_mode="Markdown")
+
+
 async def comando_poupanca(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     if not usuario_esta_vinculado(user_id):
@@ -2589,11 +2894,219 @@ async def comando_sacar(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                        context.args[0], " ".join(context.args[1:]))
 
 
+
+# ==========================================
+# SAUDAÇÃO E MENU PRINCIPAL NO TELEGRAM (/menu)
+# ==========================================
+# "oi" / "bom dia" / /start -> apresentação do Fincash + botões. /menu -> tutoriais e atalho para Investimentos.
+# Os botões usam callback_data "menu:<acao>"; o botão de Investimentos chama "inv:menu" (tratado no investimentos.py).
+# Aplicado depois de normalizar (sem acento/pontuação) e de colapsar letras repetidas ("oiii" -> "oi").
+PADRAO_SAUDACAO = re.compile(
+    r'^(?:oi|ola|eai|e ai|eae|opa|hey|hi|helo|salve|fala|bom dia|boa tarde|boa noite|tudo bem|comecar)'
+    r'(?:\s+(?:tudo bem|td bem|fincash|bot|bom dia|boa tarde|boa noite))*$')
+PEDIDOS_DE_MENU = {"menu", "ajuda", "help", "opcoes", "mais opcoes", "ver menu", "abrir menu"}
+
+AVISO_VINCULAR_HTML = "⚠️ Vincule sua conta primeiro com /login &lt;email_ou_telefone&gt; &lt;senha&gt;."
+
+TEXTO_MENU_PRINCIPAL = ("📋 <b>Menu do Fincash</b>\n\n"
+                        "O que você quer ver? Toque em uma opção.\n"
+                        "<i>Para voltar aqui depois, digite /menu.</i>")
+
+TUTORIAIS_MENU = {
+    "tutorial": (
+        "📖 <b>Como usar o Fincash</b>\n\n"
+        "É só conversar comigo, como em qualquer chat:\n\n"
+        "1️⃣ <b>Registre gastos e ganhos</b> escrevendo normalmente: "
+        "<i>gastei 50 no mercado</i> ou <i>recebi 2000 de salário</i>.\n\n"
+        "2️⃣ <b>Guarde dinheiro</b>: <i>guardar 200</i>. Para sacar: <i>sacar 100 da poupança</i>.\n\n"
+        "3️⃣ <b>Veja como você está</b>: <i>meu saldo</i> ou /resumo.\n\n"
+        "4️⃣ <b>Investimentos</b>: <i>investi 500 em CDB</i>, ou abra o menu de investimentos "
+        "para ver notícias, riscos e dicas.\n\n"
+        "5️⃣ <b>Tire dúvidas de finanças</b>: pergunte qualquer coisa sobre dinheiro.\n\n"
+        "6️⃣ <b>Acompanhe tudo no site</b>: gráficos, orçamentos e relatórios."),
+    "gastos": (
+        "💸 <b>Tutorial: gastos e receitas</b>\n\n"
+        "Escreva do seu jeito que eu entendo o valor e a categoria:\n"
+        "• <i>gastei 35 no almoço</i>\n"
+        "• <i>paguei 120 de internet</i>\n"
+        "• <i>recebi 2500 de salário</i>\n\n"
+        "Cada lançamento ganha um <b>ID</b> (ex.: #05). Para apagar, digite <i>apagar 5</i> "
+        "ou /deletar 5. Eu peço confirmação antes, porque não dá para desfazer.\n\n"
+        "Se a categoria ainda não existir, eu pergunto se você quer criá-la."),
+    "poupanca": (
+        "🐷 <b>Tutorial: poupança</b>\n\n"
+        "• <b>Guardar:</b> <i>guardar 200</i> ou /guardar 200\n"
+        "• <b>Sacar:</b> <i>sacar 100 da poupança</i> ou /sacar 100\n"
+        "• <b>Ver o total guardado:</b> <i>minha poupança</i> ou /poupanca\n\n"
+        "Guardar dinheiro não conta como gasto. Você também pode definir uma <b>meta de poupança</b> "
+        "na página Orçamentos do site e acompanhar o progresso por aqui e no painel."),
+    "categorias": (
+        "🏷️ <b>Tutorial: categorias</b>\n\n"
+        "• <b>Ver as suas:</b> /categorias ou <i>minhas categorias</i>\n"
+        "• <b>Criar:</b> <i>criar categoria Pets</i>\n"
+        "• <b>Criar de renda:</b> <i>criar categoria de renda Aluguel</i>\n"
+        "• <b>Excluir:</b> <i>excluir categoria Pets</i> (eu peço confirmação)\n\n"
+        "Assim seus gastos aparecem organizados nos gráficos e relatórios."),
+    "resumo": (
+        "📈 <b>Tutorial: resumo e saldo</b>\n\n"
+        "Digite /resumo, <i>meu saldo</i> ou <i>quanto gastei</i>.\n\n"
+        "Eu mostro o total recebido, o total gasto, o saldo atual e quanto foi para cada categoria."),
+    "site": (
+        "🌐 <b>Tutorial: painel no site</b>\n\n"
+        "Entre no site do Fincash com o mesmo e-mail ou telefone do seu cadastro. Lá você encontra:\n"
+        "• <b>Visão Geral:</b> gráficos e saldo do mês\n"
+        "• <b>Transações:</b> todos os seus lançamentos\n"
+        "• <b>Orçamentos:</b> limites por categoria e meta de poupança\n"
+        "• <b>Investimentos:</b> notícias, indicadores e análises\n"
+        "• <b>Relatórios:</b> comparativos e exportação\n\n"
+        "O que você registra aqui no Telegram aparece lá automaticamente."),
+}
+
+
+def _texto_limpo_menu(texto) -> str:
+    return re.sub(r'[^\w\s]', '', normalizar(texto)).strip()
+
+
+def eh_saudacao(texto) -> bool:
+    bruto = (texto or '').strip().lower()
+    if bruto == '/start' or bruto.startswith('/start '):          # /start (inclusive com link de convite)
+        return True
+    colapsado = re.sub(r'(.)\1+', r'\1', _texto_limpo_menu(texto))
+    return bool(PADRAO_SAUDACAO.match(colapsado))
+
+
+def eh_pedido_de_menu(texto) -> bool:
+    return _texto_limpo_menu(texto) in PEDIDOS_DE_MENU
+
+
+def _em_conversa_com_ia(context) -> bool:
+    """No modo 'Conversar com a IA' (investimentos.py) um 'oi' é uma pergunta, não uma saudação."""
+    chat = context.user_data.get('inv_chat')
+    return bool(chat) and chat.get('ate', 0) > time.time()
+
+
+def _primeiro_nome_html(telegram_id) -> str:
+    try:
+        conexao = obter_conexao()
+        try:
+            with conexao.cursor() as cursor:
+                cursor.execute("SELECT nome FROM users WHERE telegram_id = %s;", (str(telegram_id),))
+                row = cursor.fetchone()
+        finally:
+            conexao.close()
+        return escapar_html(row[0].split()[0]) if row and row[0] and row[0].split() else ""
+    except Exception as e:
+        print(f"⚠️ Menu: não consegui ler o nome: {e}")
+        return ""
+
+
+def _texto_saudacao(nome) -> str:
+    ola = f"Olá, <b>{nome}</b>! 👋" if nome else "Olá! 👋"
+    return (f"{ola}\n"
+            "Eu sou o <b>Fincash</b>, seu assistente financeiro pessoal. 💙\n\n"
+            "Posso te ajudar a registrar gastos e receitas, guardar dinheiro na poupança, "
+            "acompanhar seus investimentos e tirar dúvidas sobre finanças.\n\n"
+            "Para ver mais opções, digite /menu ou toque no botão abaixo 👇")
+
+
+def _teclado_saudacao():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📋 Abrir o menu", callback_data="menu:principal")],
+        [InlineKeyboardButton("📖 Como usar", callback_data="menu:tutorial"),
+         InlineKeyboardButton("📊 Investimentos", callback_data="inv:menu")],
+    ])
+
+
+def _teclado_menu_principal():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📖 Como usar o Fincash", callback_data="menu:tutorial")],
+        [InlineKeyboardButton("💸 Gastos e receitas", callback_data="menu:gastos"),
+         InlineKeyboardButton("🐷 Poupança", callback_data="menu:poupanca")],
+        [InlineKeyboardButton("📊 Investimentos", callback_data="inv:menu"),   # abre o menu que já existe
+         InlineKeyboardButton("🏷️ Categorias", callback_data="menu:categorias")],
+        [InlineKeyboardButton("📈 Resumo e saldo", callback_data="menu:resumo"),
+         InlineKeyboardButton("🌐 Painel no site", callback_data="menu:site")],
+    ])
+
+
+def _teclado_voltar_menu():
+    return InlineKeyboardMarkup([[InlineKeyboardButton("📋 Voltar ao menu", callback_data="menu:principal")]])
+
+
+def _sair_de_outros_modos(context):
+    """Abrir o menu principal encerra a conversa com a IA e o menu digitável de investimentos."""
+    context.user_data.pop('inv_chat', None)
+    context.user_data.pop('inv_menu', None)
+
+
+async def enviar_saudacao(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: str):
+    await update.message.reply_text(_texto_saudacao(_primeiro_nome_html(user_id)), parse_mode="HTML",
+                                    reply_markup=_teclado_saudacao())
+
+
+async def enviar_menu_principal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    _sair_de_outros_modos(context)
+    await update.message.reply_text(TEXTO_MENU_PRINCIPAL, parse_mode="HTML", reply_markup=_teclado_menu_principal())
+
+
+async def comando_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message:
+        return
+    if not usuario_esta_vinculado(str(update.effective_user.id)):
+        await update.message.reply_text(AVISO_VINCULAR_HTML, parse_mode="HTML")
+        return
+    await enviar_menu_principal(update, context)
+
+
+async def tratar_callback_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    if not usuario_esta_vinculado(str(q.from_user.id)):
+        await q.message.reply_text(AVISO_VINCULAR_HTML, parse_mode="HTML")
+        return
+
+    acao = (q.data or "")[5:]                       # tira o prefixo "menu:"
+    if acao in TUTORIAIS_MENU:
+        texto, teclado = TUTORIAIS_MENU[acao], _teclado_voltar_menu()
+    else:                                           # "principal" (ou qualquer valor desconhecido)
+        _sair_de_outros_modos(context)
+        texto, teclado = TEXTO_MENU_PRINCIPAL, _teclado_menu_principal()
+
+    try:                                            # troca o conteúdo da própria mensagem (sem poluir o chat)
+        await q.edit_message_text(texto, parse_mode="HTML", reply_markup=teclado, disable_web_page_preview=True)
+    except Exception:                               # "message is not modified" ou mensagem antiga demais
+        await q.message.reply_text(texto, parse_mode="HTML", reply_markup=teclado, disable_web_page_preview=True)
+
+
+async def interceptar_saudacao_e_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: str, texto: str) -> bool:
+    """Chamado pelo processar_mensagem (usuário já vinculado). Retorna True se tratou a mensagem."""
+    if _em_conversa_com_ia(context):                # no modo conversa, quem manda é o investimentos.py
+        return False
+    if eh_saudacao(texto):
+        await enviar_saudacao(update, context, user_id)
+        return True
+    if eh_pedido_de_menu(texto):
+        await enviar_menu_principal(update, context)
+        return True
+    return False
+
+
+# ==========================================
+# MÓDULO DE INVESTIMENTOS
+# ==========================================
+investimentos.configurar(
+    obter_conexao=obter_conexao,
+    cliente_groq=cliente_groq,
+    modelo="openai/gpt-oss-120b",   # <- era "model", o nome certo é "modelo"
+    usuario_esta_vinculado=usuario_esta_vinculado
+)
+investimentos.registrar_web(app_web)   # rotas web podem ser registradas já aqui
 # ==========================================
 # INICIALIZAÇÃO DA APLICAÇÃO (BOT + WEB)
 # ==========================================
+
 if __name__ == "__main__":
-    criar_tabelas()
+    investimentos.preparar_banco()   # <- aqui, depois de criar_tabelas()
 
     thread_web = threading.Thread(target=rodar_flask)
     thread_web.daemon = True
@@ -2609,6 +3122,16 @@ if __name__ == "__main__":
     else:
         app = ApplicationBuilder().token(token_telegram).build()
 
+        # Investimentos primeiro, para o /investir e os botões terem prioridade
+        investimentos.registrar_telegram(app)   # <- registra no MESMO app do polling
+
+        # Menu principal: /menu (e apelidos), botões "menu:*" e /start
+        app.add_handler(CommandHandler("menu", comando_menu))
+        app.add_handler(CommandHandler("ajuda", comando_menu))
+        app.add_handler(CommandHandler("help", comando_menu))
+        app.add_handler(CallbackQueryHandler(tratar_callback_menu, pattern=r"^menu:"))
+        app.add_handler(CommandHandler("start", processar_mensagem))   # ativa a conta ou dá as boas-vindas
+
         app.add_handler(CommandHandler("resumo", comando_resumo))
         app.add_handler(CommandHandler("deletar", comando_deletar))
         app.add_handler(CommandHandler("apagar", comando_deletar))
@@ -2620,7 +3143,7 @@ if __name__ == "__main__":
         app.add_handler(CommandHandler("sacar", comando_sacar))
         app.add_handler(CommandHandler("poupanca", comando_poupanca))
         app.add_handler(CommandHandler("login", processar_mensagem))
-        
+
         # Registra tratador de texto E compartilhamento de contatos
         app.add_handler(
             MessageHandler((filters.TEXT | filters.CONTACT) & ~filters.COMMAND, processar_mensagem)

@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="pt-BR">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -27,13 +28,16 @@
     <!-- CSS Customizado -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
+
 <body class="bg-slate-100 text-slate-800 antialiased flex h-screen overflow-hidden">
 
     <!-- Mobile Sidebar Backdrop -->
-    <div id="sidebar-backdrop" onclick="toggleSidebar()" class="fixed inset-0 bg-slate-900/50 z-20 hidden lg:hidden transition-opacity"></div>
+    <div id="sidebar-backdrop" onclick="toggleSidebar()"
+        class="fixed inset-0 bg-slate-900/50 z-20 hidden lg:hidden transition-opacity"></div>
 
     <!-- Sidebar -->
-    <aside id="sidebar" class="fixed lg:static inset-y-0 left-0 z-30 w-64 bg-brand-sidebar text-white flex flex-col transform -translate-x-full lg:translate-x-0 transition-transform duration-300 ease-in-out shadow-xl">
+    <aside id="sidebar"
+        class="fixed lg:static inset-y-0 left-0 z-30 w-64 bg-brand-sidebar text-white flex flex-col transform -translate-x-full lg:translate-x-0 transition-transform duration-300 ease-in-out shadow-xl">
         <div class="p-6 flex items-center gap-3 border-b border-slate-700/50">
             <div class="bg-blue-600 p-2 rounded-lg text-white flex items-center justify-center shadow-lg">
                 <i class="fa-solid fa-chart-line text-xl"></i>
@@ -42,30 +46,41 @@
         </div>
 
         <nav class="flex-1 px-4 py-6 space-y-2 overflow-y-auto">
-            <a href="/" class="flex items-center gap-3 px-4 py-3 bg-brand-active text-white font-medium rounded-xl transition duration-200 shadow-sm border-l-4 border-blue-500">
+            <a href="/"
+                class="flex items-center gap-3 px-4 py-3 bg-brand-active text-white font-medium rounded-xl transition duration-200 shadow-sm border-l-4 border-blue-500">
                 <i class="fa-solid fa-square-poll-vertical w-5 text-blue-400"></i>
                 <span>Visão Geral</span>
             </a>
-            <a href="/transacoes" class="flex items-center gap-3 px-4 py-3 text-slate-300 hover:bg-slate-800/60 hover:text-white font-medium rounded-xl transition duration-200">
+            <a href="/transacoes"
+                class="flex items-center gap-3 px-4 py-3 text-slate-300 hover:bg-slate-800/60 hover:text-white font-medium rounded-xl transition duration-200">
                 <i class="fa-solid fa-arrow-right-arrow-left w-5"></i>
                 <span>Transações</span>
             </a>
-            <a href="/orcamentos" class="flex items-center gap-3 px-4 py-3 text-slate-300 hover:bg-slate-800/60 hover:text-white font-medium rounded-xl transition duration-200">
+            <a href="/orcamentos"
+                class="flex items-center gap-3 px-4 py-3 text-slate-300 hover:bg-slate-800/60 hover:text-white font-medium rounded-xl transition duration-200">
                 <i class="fa-solid fa-wallet w-5"></i>
                 <span>Orçamentos</span>
             </a>
-            <a href="/relatorios" class="flex items-center gap-3 px-4 py-3 text-slate-300 hover:bg-slate-800/60 hover:text-white font-medium rounded-xl transition duration-200">
+            <a href="/investimentos"
+                class="flex items-center gap-3 px-4 py-3 text-slate-300 hover:bg-slate-800/60 hover:text-white font-medium rounded-xl transition duration-200">
+                <i class="fa-solid fa-arrow-trend-up w-5"></i>
+                <span>Investimentos</span>
+            </a>
+            <a href="/relatorios"
+                class="flex items-center gap-3 px-4 py-3 text-slate-300 hover:bg-slate-800/60 hover:text-white font-medium rounded-xl transition duration-200">
                 <i class="fa-solid fa-chart-pie w-5"></i>
                 <span>Relatórios</span>
             </a>
-            <a href="/perfil" class="flex items-center gap-3 px-4 py-3 text-slate-300 hover:bg-slate-800/60 hover:text-white font-medium rounded-xl transition duration-200">
+            <a href="/perfil"
+                class="flex items-center gap-3 px-4 py-3 text-slate-300 hover:bg-slate-800/60 hover:text-white font-medium rounded-xl transition duration-200">
                 <i class="fa-solid fa-user w-5"></i>
                 <span>Meu Perfil</span>
             </a>
         </nav>
 
         <div class="p-4 border-t border-slate-700/50">
-            <a href="/logout" class="flex items-center gap-3 px-4 py-2.5 text-red-400 hover:bg-red-500/10 hover:text-red-300 rounded-xl transition font-medium text-sm">
+            <a href="/logout"
+                class="flex items-center gap-3 px-4 py-2.5 text-red-400 hover:bg-red-500/10 hover:text-red-300 rounded-xl transition font-medium text-sm">
                 <i class="fa-solid fa-right-from-bracket"></i>
                 <span>Sair da conta</span>
             </a>
@@ -78,7 +93,8 @@
         <!-- Top Header Bar -->
         <header class="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between shadow-sm z-10">
             <div class="flex items-center gap-4">
-                <button onclick="toggleSidebar()" class="lg:hidden text-slate-600 hover:text-slate-900 focus:outline-none p-1">
+                <button onclick="toggleSidebar()"
+                    class="lg:hidden text-slate-600 hover:text-slate-900 focus:outline-none p-1">
                     <i class="fa-solid fa-bars text-xl"></i>
                 </button>
                 <h1 class="text-2xl font-bold text-slate-800 tracking-tight">Dashboard</h1>
@@ -86,15 +102,19 @@
 
             <div class="flex items-center gap-4">
                 <!-- Seletor Exclusivo de Mês e Ano -->
-                <div class="relative flex items-center bg-slate-50 p-2 rounded-xl border border-slate-200 cursor-pointer">
+                <div
+                    class="relative flex items-center bg-slate-50 p-2 rounded-xl border border-slate-200 cursor-pointer">
                     <i class="fa-solid fa-calendar-days text-slate-500 pl-2 pr-1"></i>
-                    <input type="month" id="filtro-mes" class="bg-transparent text-sm font-semibold text-slate-700 focus:outline-none cursor-pointer pr-2" onchange="aoMudarMes(this.value)" />
+                    <input type="month" id="filtro-mes"
+                        class="bg-transparent text-sm font-semibold text-slate-700 focus:outline-none cursor-pointer pr-2"
+                        onchange="aoMudarMes(this.value)" />
                 </div>
 
                 <!-- Perfil do Usuário (clique para abrir o perfil) -->
                 <a href="/perfil" class="flex items-center gap-3" title="Meu perfil">
                     <span class="font-medium text-slate-700 hidden sm:inline-block" id="user-name">Carregando...</span>
-                    <img src="https://placehold.co/100x100/2563eb/ffffff?text=U" alt="Perfil do Usuário" class="w-10 h-10 rounded-full border-2 border-blue-500 shadow-sm object-cover">
+                    <img src="https://placehold.co/100x100/2563eb/ffffff?text=U" alt="Perfil do Usuário"
+                        class="w-10 h-10 rounded-full border-2 border-blue-500 shadow-sm object-cover">
                 </a>
             </div>
         </header>
@@ -106,21 +126,48 @@
                 <!-- Lembrete de e-mail digitado errado (preenchido pelo dashboard.js) -->
                 <div id="email-alert-container"></div>
 
-                <!-- CARD DE POUPANÇA / RESERVA DE EMERGÊNCIA -->
-                <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-200/80 flex items-center justify-between">
-                    <div class="flex items-center gap-4">
-                        <div class="w-12 h-12 rounded-xl bg-emerald-100 text-emerald-600 flex items-center justify-center font-bold text-xl">
-                            <i class="fa-solid fa-piggy-bank"></i>
-                        </div>
-                        <div>
-                            <span class="text-xs font-semibold uppercase text-slate-400">Total Guardado / Poupança</span>
-                            <h3 class="text-2xl font-extrabold text-slate-800" id="total-poupanca">R$ 0,00</h3>
-                            <p id="meta-poupanca-texto" class="hidden text-xs text-slate-500 mt-0.5"></p>
+                <!-- CARDS: POUPANÇA + INVESTIMENTOS -->
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+
+                    <!-- CARD DE POUPANÇA / RESERVA DE EMERGÊNCIA -->
+                    <div
+                        class="bg-white rounded-2xl p-5 shadow-sm border border-slate-200/80 flex items-center justify-between">
+                        <div class="flex items-center gap-4">
+                            <div
+                                class="w-12 h-12 rounded-xl bg-emerald-100 text-emerald-600 flex items-center justify-center font-bold text-xl">
+                                <i class="fa-solid fa-piggy-bank"></i>
+                            </div>
+                            <div>
+                                <span class="text-xs font-semibold uppercase text-slate-400">Total Guardado /
+                                    Poupança</span>
+                                <h3 class="text-2xl font-extrabold text-slate-800" id="total-poupanca">R$ 0,00</h3>
+                                <p id="meta-poupanca-texto" class="hidden text-xs text-slate-500 mt-0.5"></p>
+                            </div>
                         </div>
                     </div>
-                    <span class="text-xs font-medium text-emerald-600 bg-emerald-50 px-3 py-1 rounded-full border border-emerald-100">
-                        <i class="fa-solid fa-arrow-trend-up mr-1"></i> Reserva Ativa
-                    </span>
+
+                    <!-- CARD DE INVESTIMENTOS -->
+                    <div
+                        class="bg-white rounded-2xl p-5 shadow-sm border border-slate-200/80 flex items-center justify-between">
+                        <div class="flex items-center gap-4">
+                            <div
+                                class="w-12 h-12 rounded-xl bg-blue-100 text-blue-600 flex items-center justify-center font-bold text-xl">
+                                <i class="fa-solid fa-arrow-trend-up"></i>
+                            </div>
+                            <div>
+                                <span class="text-xs font-semibold uppercase text-slate-400">Investimentos</span>
+                                <h3 class="text-2xl font-extrabold text-slate-800" id="total-investimentos">R$ 0,00</h3>
+                                <p class="text-xs text-slate-500 mt-0.5" id="investimentos-resumo">
+                                    Entradas: R$ 0,00 • Saídas: R$ 0,00
+                                </p>
+                            </div>
+                        </div>
+                        <a href="/investimentos"
+                            class="text-xs font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 px-3 py-1 rounded-full border border-blue-100 transition">
+                            Ver detalhes
+                        </a>
+                    </div>
+
                 </div>
 
                 <!-- Dashboard Grid Layout -->
@@ -129,7 +176,8 @@
                     <!-- CARD 1: Gastos por Categoria -->
                     <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-200/80">
                         <div class="flex items-center justify-between mb-4">
-                            <h2 class="text-xs font-bold tracking-wider text-slate-600 uppercase">Gastos por Categoria</h2>
+                            <h2 class="text-xs font-bold tracking-wider text-slate-600 uppercase">Gastos por Categoria
+                            </h2>
                             <i class="fa-solid fa-chart-column text-slate-400"></i>
                         </div>
                         <div class="h-64">
@@ -149,22 +197,28 @@
                     </div>
 
                     <!-- CARD 3: Status Chatbot -->
-                    <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-200/80 flex flex-col justify-between">
+                    <div
+                        class="bg-white rounded-2xl p-5 shadow-sm border border-slate-200/80 flex flex-col justify-between">
                         <div>
                             <div class="flex items-center justify-between mb-4">
-                                <h2 class="text-xs font-bold tracking-wider text-slate-600 uppercase">Status Chatbot</h2>
+                                <h2 class="text-xs font-bold tracking-wider text-slate-600 uppercase">Status Chatbot
+                                </h2>
                                 <!-- Badge de Status Ativo/Inativo -->
-                                <span id="bot-status-badge" class="p-1.5 bg-emerald-100 text-emerald-600 rounded-lg text-xs font-semibold flex items-center gap-1">
+                                <span id="bot-status-badge"
+                                    class="p-1.5 bg-emerald-100 text-emerald-600 rounded-lg text-xs font-semibold flex items-center gap-1">
                                     <i class="fa-solid fa-robot"></i> Ativo
                                 </span>
                             </div>
                             <div class="space-y-3 mt-2">
                                 <p class="text-sm text-slate-500 font-medium">
-                                    Última atividade: <span class="text-slate-700 font-semibold" id="bot-last-update">--/--/----</span>
+                                    Última atividade: <span class="text-slate-700 font-semibold"
+                                        id="bot-last-update">--/--/----</span>
                                 </p>
                                 <!-- Caixinha de Conexão -->
-                                <div id="bot-connection-box" class="p-3 bg-emerald-50 border border-emerald-100 rounded-xl">
-                                    <p id="bot-connection-text" class="text-emerald-800 text-sm font-medium flex items-center gap-2">
+                                <div id="bot-connection-box"
+                                    class="p-3 bg-emerald-50 border border-emerald-100 rounded-xl">
+                                    <p id="bot-connection-text"
+                                        class="text-emerald-800 text-sm font-medium flex items-center gap-2">
                                         <i class="fa-solid fa-circle-check text-emerald-500"></i>
                                         Conectado ao Telegram
                                     </p>
@@ -176,7 +230,8 @@
                     <!-- CARD 4: Evoluções de Saldo -->
                     <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-200/80 lg:col-span-2">
                         <div class="flex items-center justify-between mb-4">
-                            <h2 class="text-xs font-bold tracking-wider text-slate-600 uppercase">Evoluções de Saldo</h2>
+                            <h2 class="text-xs font-bold tracking-wider text-slate-600 uppercase">Evoluções de Saldo
+                            </h2>
                             <i class="fa-solid fa-chart-line text-slate-400"></i>
                         </div>
                         <div class="h-64">
@@ -185,10 +240,12 @@
                     </div>
 
                     <!-- CARD 5: Risco (Alerta IA) -->
-                    <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-200/80 flex flex-col justify-between">
+                    <div
+                        class="bg-white rounded-2xl p-5 shadow-sm border border-slate-200/80 flex flex-col justify-between">
                         <div>
                             <div class="flex items-center gap-3 mb-4">
-                                <div id="risk-icon-box" class="w-10 h-10 rounded-xl bg-slate-100 text-slate-500 flex items-center justify-center font-bold text-lg shadow-sm transition-colors">
+                                <div id="risk-icon-box"
+                                    class="w-10 h-10 rounded-xl bg-slate-100 text-slate-500 flex items-center justify-center font-bold text-lg shadow-sm transition-colors">
                                     <i id="risk-icon" class="fa-solid fa-triangle-exclamation"></i>
                                 </div>
                                 <h2 class="text-xs font-bold tracking-wider text-slate-600 uppercase">Risco</h2>
@@ -201,7 +258,8 @@
                             </div>
                         </div>
                         <div class="w-full bg-slate-100 h-2 rounded-full overflow-hidden mt-4">
-                            <div id="risk-bar" class="bg-emerald-500 h-full rounded-full transition-all duration-500" style="width: 0%;"></div>
+                            <div id="risk-bar" class="bg-emerald-500 h-full rounded-full transition-all duration-500"
+                                style="width: 0%;"></div>
                         </div>
                     </div>
 
@@ -212,4 +270,5 @@
 
     <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
 </body>
+
 </html>
