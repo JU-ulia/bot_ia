@@ -395,6 +395,25 @@ def criar_tabelas():
         cursor.execute("ALTER TABLE transactions ALTER COLUMN valor TYPE NUMERIC(12, 2);")
         cursor.execute("ALTER TABLE transactions_backup ALTER COLUMN valor TYPE NUMERIC(12, 2);")
 
+        # Alertas de teto de gastos (teto = renda do mês)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS alert_settings (
+            telegram_id TEXT PRIMARY KEY,
+            ativo BOOLEAN NOT NULL DEFAULT TRUE,
+            limiar INT NOT NULL DEFAULT 80 CHECK (limiar BETWEEN 50 AND 99)
+        );
+        """)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS alerts_sent (
+            id SERIAL PRIMARY KEY,
+            telegram_id TEXT NOT NULL,
+            mes CHAR(7) NOT NULL,
+            nivel VARCHAR(10) NOT NULL,
+            enviado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (telegram_id, mes, nivel)
+        );
+        """)
+
         conexao.commit()
         print("Tabelas e índices sincronizados com sucesso!")
 
@@ -1164,6 +1183,189 @@ def api_exportar_csv():
         headers={"Content-Disposition": f"attachment; filename=fincash_relatorio_{mes}.csv"},
     )
 
+# ==========================================
+# ANÁLISE PREDITIVA: PREVISÃO DE GASTOS DO PRÓXIMO MÊS
+# ==========================================
+MESES_BASE_PREVISAO = 3   # quantos meses fechados entram no cálculo
+CONFIANCA_PREVISAO = {0: "baixa", 1: "baixa", 2: "média", 3: "boa"}
+
+
+def calcular_previsao(tid):
+    """Estima os gastos do próximo mês com média ponderada dos últimos meses fechados."""
+    hoje = datetime.now()
+    mes_atual = hoje.strftime('%Y-%m')
+    prox = deslocar_mes(mes_atual, 1)
+    base = {"vinculado": True, "mes": prox, "mes_rotulo": rotulo_mes(prox)}
+
+    candidatos = [deslocar_mes(mes_atual, -i) for i in range(MESES_BASE_PREVISAO, 0, -1)]  # do mais antigo ao mais novo
+    inicio = datetime(int(candidatos[0][:4]), int(candidatos[0][5:7]), 1)
+    fim = datetime(int(mes_atual[:4]), int(mes_atual[5:7]), 1)
+
+    conexao = obter_conexao()
+    try:
+        with conexao.cursor() as cursor:
+            cursor.execute("SELECT TO_CHAR(MIN(data), 'YYYY-MM') FROM transactions WHERE TRIM(telegram_id) = %s;", (tid,))
+            primeiro = cursor.fetchone()[0]
+            cursor.execute("""
+                SELECT TO_CHAR(data, 'YYYY-MM'), tipo, COALESCE(categoria, 'Sem categoria'), SUM(valor)
+                FROM transactions
+                WHERE TRIM(telegram_id) = %s AND data >= %s AND data < %s
+                GROUP BY 1, 2, 3;
+            """, (tid, inicio, fim))
+            linhas = cursor.fetchall()
+            cursor.execute("""
+                SELECT COALESCE(SUM(valor), 0) FROM transactions
+                WHERE TRIM(telegram_id) = %s AND tipo = 'despesa' AND TO_CHAR(data, 'YYYY-MM') = %s;
+            """, (tid, mes_atual))
+            gasto_mes_atual = float(cursor.fetchone()[0])
+    finally:
+        conexao.close()
+
+    if not primeiro:
+        return {**base, "disponivel": False, "motivo": "sem_dados"}
+
+    # só entram meses a partir do primeiro lançamento da pessoa (meses antes disso não são "zero gasto")
+    meses_base = [k for k in candidatos if k >= primeiro]
+
+    # Sem nenhum mês fechado: projeta pelo ritmo do mês atual (confiança baixa)
+    if not meses_base:
+        if gasto_mes_atual <= 0:
+            return {**base, "disponivel": False, "motivo": "sem_dados"}
+        dias_no_mes = calendar.monthrange(hoje.year, hoje.month)[1]
+        proj = gasto_mes_atual / hoje.day * dias_no_mes
+        return {**base, "disponivel": True, "metodo": "ritmo", "meses_base": 0,
+                "previsao": round(proj, 2), "faixa_min": None, "faixa_max": None,
+                "confianca": "baixa", "categorias": [],
+                "avisos": ["Você ainda não tem um mês completo de histórico: a previsão usa o ritmo de gastos deste mês e fica mais precisa com o tempo."]}
+
+    n = len(meses_base)
+    pesos = list(range(1, n + 1))        # o mês mais recente pesa mais
+    soma_pesos = sum(pesos)
+
+    renda = {k: 0.0 for k in meses_base}
+    nomes, por_cat = {}, {}
+    for k, tipo, cat, valor in linhas:
+        if k not in renda:
+            continue
+        valor = float(valor)
+        if tipo == 'renda':
+            renda[k] += valor
+        elif tipo == 'despesa':
+            ch = normalizar(cat)
+            nomes.setdefault(ch, cat)
+            por_cat.setdefault(ch, [0.0] * n)[meses_base.index(k)] += valor
+
+    categorias = []
+    for ch, serie in por_cat.items():
+        media_pond = sum(v * p for v, p in zip(serie, pesos)) / soma_pesos
+        fixa = nomes[ch].strip().lower() in CATEGORIAS_FIXAS
+        valor_prev = serie[-1] if (fixa and serie[-1] > 0) else media_pond   # conta fixa se repete
+        categorias.append({"categoria": nomes[ch], "tipo": "fixa" if fixa else "variavel",
+                           "previsao": round(valor_prev, 2), "ultimo_mes": round(serie[-1], 2)})
+    categorias.sort(key=lambda c: -c["previsao"])
+    previsao = sum(c["previsao"] for c in categorias)
+
+    # Faixa: previsão +/- a variação (desvio padrão) dos totais mensais
+    faixa_min = faixa_max = None
+    totais_hist = [sum(serie[i] for serie in por_cat.values()) for i in range(n)]
+    if n >= 2:
+        media = sum(totais_hist) / n
+        desvio = math.sqrt(sum((t - media) ** 2 for t in totais_hist) / n)
+        faixa_min, faixa_max = round(max(previsao - desvio, 0), 2), round(previsao + desvio, 2)
+
+    # Tendência de alta: categorias variáveis cujo último mês subiu sobre a média dos anteriores
+    altas = []
+    if n >= 2:
+        for ch, serie in por_cat.items():
+            if nomes[ch].strip().lower() in CATEGORIAS_FIXAS:
+                continue
+            antes = sum(serie[:-1]) / (n - 1)
+            aumento = serie[-1] - antes
+            if antes > 0 and aumento >= 50 and aumento / antes >= 0.15:
+                altas.append((aumento, nomes[ch]))
+        altas.sort(reverse=True)
+
+    renda_media = sum(renda.values()) / n
+    avisos = []
+    if renda_media > 0 and previsao > renda_media:
+        avisos.append(f"A previsão supera a sua renda média mensal ({fmt_brl(renda_media)}). Vale rever os gastos.")
+    if altas:
+        avisos.append(f"Tendência de alta em \"{altas[0][1]}\", baseada nos últimos {n} meses.")
+    if renda_media > 0 and previsao <= renda_media and previsao >= renda_media * 0.8:
+        avisos.append(f"A previsão equivale a {previsao / renda_media * 100:.0f}% da sua renda média mensal.")
+    if not avisos:
+        avisos.append(f"Seus gastos estão estáveis nos últimos {n} {'mês' if n == 1 else 'meses'}.")
+    if n == 1:
+        avisos.append("Só há um mês de histórico, então a previsão ainda é bem aproximada.")
+
+    return {**base, "disponivel": True, "metodo": "media_ponderada", "meses_base": n,
+            "previsao": round(previsao, 2), "faixa_min": faixa_min, "faixa_max": faixa_max,
+            "confianca": CONFIANCA_PREVISAO.get(n, "boa"), "categorias": categorias[:5], "avisos": avisos}
+
+
+@app_web.route('/api/previsao', methods=['GET'])
+def api_previsao():
+    tid, erro = _exigir_usuario()
+    if erro:
+        return erro
+    if not tid:
+        return jsonify({"vinculado": False})
+    try:
+        return jsonify(calcular_previsao(tid))
+    except Exception:
+        traceback.print_exc()
+        return jsonify({"erro": "Não foi possível calcular a previsão agora."}), 500
+
+
+# ---------- Telegram: "qual a minha previsão de gastos para o mês que vem?" ----------
+PADRAO_PREVISAO_TERMO = re.compile(r'\b(?:previsao|prever|projecao|projetar|estimativa|estimar)\b')
+PADRAO_PREVISAO_ASSUNTO = re.compile(r'\b(?:gast\w*|despes\w*|mes que vem|proximo mes|mes seguinte)\b')
+PADRAO_QUANTO_VOU_GASTAR = re.compile(r'\bquanto\s+(?:eu\s+)?(?:vou|devo|deverei|irei)\s+gastar\b')
+
+
+def eh_pedido_previsao(texto) -> bool:
+    t = _texto_limpo_menu(texto)
+    if 'invest' in t:          # previsão de investimentos é assunto do módulo de investimentos
+        return False
+    return bool(PADRAO_QUANTO_VOU_GASTAR.search(t)
+                or (PADRAO_PREVISAO_TERMO.search(t) and PADRAO_PREVISAO_ASSUNTO.search(t)))
+
+
+def montar_texto_previsao(p) -> str:
+    linhas = [f"🔮 *Previsão de gastos para {p['mes_rotulo']}*", ""]
+    linhas.append(f"💸 Você tende a gastar cerca de *{fmt_brl(p['previsao'])}*")
+    if p.get("faixa_min") is not None:
+        linhas.append(f"📏 Faixa provável: {fmt_brl(p['faixa_min'])} a {fmt_brl(p['faixa_max'])}")
+    if p["metodo"] == "media_ponderada":
+        n = p["meses_base"]
+        linhas.append(f"📊 Base: {n} {'mês fechado' if n == 1 else 'meses fechados'} (os mais recentes pesam mais)")
+    if p["categorias"]:
+        linhas += ["", "*Maiores categorias previstas:*"]
+        linhas += [f"• {md_seguro(c['categoria'])}: {fmt_brl(c['previsao'])}" for c in p["categorias"][:3]]
+    linhas += [""] + [f"⚠️ {md_seguro(a)}" for a in p["avisos"]]
+    linhas += ["", f"Confiança da previsão: *{p['confianca']}*. É uma estimativa baseada no seu histórico, não uma garantia."]
+    return "\n".join(linhas)
+
+
+async def responder_previsao(update: Update, user_id: str):
+    if not usuario_esta_vinculado(user_id):
+        await update.message.reply_text("⚠️ Vincule sua conta primeiro com `/login <email_ou_telefone> <senha>`.", parse_mode="Markdown")
+        return
+    try:
+        p = calcular_previsao(str(user_id).strip())
+    except Exception:
+        traceback.print_exc()
+        await update.message.reply_text("❌ Não consegui calcular a previsão agora. Tente novamente em instantes.")
+        return
+    if not p["disponivel"]:
+        await update.message.reply_text("📭 Ainda não tenho gastos suficientes para prever o próximo mês. "
+                                        "Registre suas despesas e tente de novo em alguns dias.")
+        return
+    await update.message.reply_text(montar_texto_previsao(p), parse_mode="Markdown")
+
+
+async def comando_previsao(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await responder_previsao(update, str(update.effective_user.id))
 
 @app_web.route('/login')
 def login_page():
@@ -2145,6 +2347,11 @@ async def processar_mensagem(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await responder_movimento_investimento(update, user_id, *mov_inv)
         return
 
+    # Interceptador de Previsão ("qual a minha previsão de gasto para o mês que vem?")
+    if eh_pedido_previsao(texto_usuario):
+        await responder_previsao(update, user_id)
+        return
+
     # Interceptador de Resumo
     termos_resumo = ["quanto eu gastei", "quanto gastei", "quanto eu tenho", "meu saldo", "resumo de gastos", "quanto já gastei"]
     if any(termo in texto_lower for termo in termos_resumo):
@@ -2576,6 +2783,168 @@ def _conversa_ativa(context):
         return None
     return c
 
+# ==========================================
+# ALERTAS DE TETO DE GASTOS (teto = renda do mês)
+# ==========================================
+def avaliar_alerta_teto(telegram_id):
+    """Se o gasto do mês chegou perto (ou passou) da renda e esse nível ainda não foi avisado,
+    registra o aviso e devolve os dados para enviar. Senão devolve None."""
+    tid = str(telegram_id).strip()
+    mes = datetime.now().strftime('%Y-%m')
+    conexao = obter_conexao()
+    try:
+        with conexao.cursor() as cursor:
+            cursor.execute("SELECT ativo, limiar FROM alert_settings WHERE telegram_id = %s;", (tid,))
+            cfg = cursor.fetchone()
+            ativo, limiar = cfg if cfg else (True, 80)
+            if not ativo:
+                return None
+
+            cursor.execute("""
+                SELECT COALESCE(SUM(CASE WHEN tipo = 'renda' THEN valor END), 0),
+                       COALESCE(SUM(CASE WHEN tipo = 'despesa' THEN valor END), 0)
+                FROM transactions
+                WHERE TRIM(telegram_id) = %s AND TO_CHAR(data, 'YYYY-MM') = %s;
+            """, (tid, mes))
+            renda, despesa = (float(x) for x in cursor.fetchone())
+            if renda <= 0:
+                return None   # sem renda no mês não existe teto para comparar
+
+            pct = despesa / renda * 100
+            if pct >= 100:
+                nivel = 'estourou'
+            elif pct >= limiar:
+                nivel = 'proximo'
+            else:
+                return None
+
+            # A constraint UNIQUE garante 1 aviso por nível/mês, mesmo com mensagens simultâneas
+            cursor.execute("""
+                INSERT INTO alerts_sent (telegram_id, mes, nivel) VALUES (%s, %s, %s)
+                ON CONFLICT DO NOTHING RETURNING id;
+            """, (tid, mes, nivel))
+            if cursor.fetchone() is None:
+                return None
+            if nivel == 'estourou':   # pulou direto: não manda o aviso "próximo" depois
+                cursor.execute("""
+                    INSERT INTO alerts_sent (telegram_id, mes, nivel) VALUES (%s, %s, 'proximo')
+                    ON CONFLICT DO NOTHING;
+                """, (tid, mes))
+
+            cursor.execute("SELECT nome, email, COALESCE(email_invalido, FALSE) FROM users WHERE telegram_id = %s;", (tid,))
+            u = cursor.fetchone()
+        conexao.commit()
+    except Exception:
+        conexao.rollback()
+        raise
+    finally:
+        conexao.close()
+
+    nome, email, email_invalido = u if u else ("", None, True)
+    return {"nivel": nivel, "pct": pct, "renda": renda, "despesa": despesa,
+            "restante": renda - despesa, "nome": (nome or "").split()[0] if nome else "",
+            "email": None if email_invalido else email}
+
+
+def montar_textos_alerta(a):
+    if a["nivel"] == 'estourou':
+        titulo = "🚨 Você ultrapassou o seu teto de gastos!"
+        detalhe = f"Você já gastou {fmt_brl(a['despesa'])} neste mês, {fmt_brl(a['despesa'] - a['renda'])} acima da sua renda ({fmt_brl(a['renda'])})."
+    else:
+        titulo = "⚠️ Você está perto do seu teto de gastos!"
+        detalhe = (f"Você já usou {a['pct']:.0f}% da sua renda do mês: {fmt_brl(a['despesa'])} de {fmt_brl(a['renda'])}. "
+                   f"Ainda restam {fmt_brl(a['restante'])}.")
+    telegram = f"{titulo}\n\n{detalhe}\n\nPara ajustar os avisos: /alertas"
+    html = f"""
+    <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: 0 auto; border: 1px solid #e0e0e0; border-radius: 8px; padding: 20px;">
+        <h2 style="color: #2563eb; text-align: center;">fincash</h2>
+        <hr style="border: 0; border-top: 1px solid #eee;">
+        <p>Olá{', <strong>' + escapar_html(a['nome']) + '</strong>' if a['nome'] else ''}!</p>
+        <p><strong>{titulo}</strong></p>
+        <p>{detalhe}</p>
+        <p style="font-size: 13px; color: #64748b;">Para desativar ou ajustar esses avisos, envie /alertas no Telegram.</p>
+    </div>
+    """
+    return titulo, telegram, html
+
+
+async def enviar_alertas_teto(update: Update, user_id: str):
+    """Chamada depois de registrar uma despesa. Nunca deve derrubar o registro do lançamento."""
+    try:
+        a = avaliar_alerta_teto(user_id)
+        if not a:
+            return
+        titulo, texto_telegram, html = montar_textos_alerta(a)
+        await update.message.reply_text(texto_telegram)
+        if a["email"]:
+            with app_web.app_context():
+                msg = Message(subject=titulo, recipients=[a["email"]], body=texto_telegram, html=html)
+            threading.Thread(target=enviar_email_async, args=(app_web, msg), daemon=True).start()
+        else:
+            print("⚠ Alerta por e-mail não enviado: usuário sem e-mail ou com e-mail marcado como inválido.")
+    except Exception:
+        print("⚠ Falha ao avaliar/enviar alerta de teto:")
+        traceback.print_exc()
+
+
+def salvar_config_alertas(telegram_id, ativo=None, limiar=None):
+    conexao = obter_conexao()
+    try:
+        with conexao.cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO alert_settings (telegram_id, ativo, limiar)
+                VALUES (%s, COALESCE(%s, TRUE), COALESCE(%s, 80))
+                ON CONFLICT (telegram_id) DO UPDATE
+                SET ativo = COALESCE(%s, alert_settings.ativo),
+                    limiar = COALESCE(%s, alert_settings.limiar);
+            """, (str(telegram_id).strip(), ativo, limiar, ativo, limiar))
+        conexao.commit()
+    except Exception:
+        conexao.rollback()
+        raise
+    finally:
+        conexao.close()
+
+
+async def comando_alertas(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    if not usuario_esta_vinculado(user_id):
+        await update.message.reply_text("⚠️ Vincule sua conta primeiro com `/login <email_ou_telefone> <senha>`.", parse_mode="Markdown")
+        return
+
+    arg = context.args[0].strip().lower().rstrip('%') if context.args else ""
+    if arg in ("on", "ligar", "ativar"):
+        salvar_config_alertas(user_id, ativo=True)
+        await update.message.reply_text("🔔 Alertas de teto de gastos *ativados*.", parse_mode="Markdown")
+        return
+    if arg in ("off", "desligar", "desativar"):
+        salvar_config_alertas(user_id, ativo=False)
+        await update.message.reply_text("🔕 Alertas de teto de gastos *desativados*.", parse_mode="Markdown")
+        return
+    if arg.isdigit():
+        n = int(arg)
+        if not 50 <= n <= 99:
+            await update.message.reply_text("⚠️ Escolha um percentual entre 50 e 99. Exemplo: `/alertas 90`", parse_mode="Markdown")
+            return
+        salvar_config_alertas(user_id, ativo=True, limiar=n)
+        await update.message.reply_text(f"✅ Vou te avisar quando você usar *{n}%* da renda do mês.", parse_mode="Markdown")
+        return
+
+    conexao = obter_conexao()
+    try:
+        with conexao.cursor() as cursor:
+            cursor.execute("SELECT ativo, limiar FROM alert_settings WHERE telegram_id = %s;", (user_id,))
+            cfg = cursor.fetchone()
+    finally:
+        conexao.close()
+    ativo, limiar = cfg if cfg else (True, 80)
+    await update.message.reply_text(
+        f"{'🔔' if ativo else '🔕'} *Alertas de teto de gastos:* {'ativados' if ativo else 'desativados'}\n"
+        f"🎯 Aviso ao usar *{limiar}%* da renda do mês (e outro ao passar de 100%).\n"
+        "📬 Enviados pelo Telegram e por e-mail.\n\n"
+        "• `/alertas on` ou `/alertas off`\n"
+        "• `/alertas 90` para mudar o percentual",
+        parse_mode="Markdown")
 
 async def salvar_e_responder_lancamento(update: Update, user_id: str, dados: dict):
     transacao_id = salvar_transacao(user_id, dados)
@@ -2589,6 +2958,9 @@ async def salvar_e_responder_lancamento(update: Update, user_id: str, dados: dic
         f"📊 **Tipo:** {tipo_str}"
     )
     await update.message.reply_text(resposta, parse_mode="Markdown")
+    
+    if dados["tipo"] == "despesa":
+        await enviar_alertas_teto(update, user_id)
 
 
 async def tratar_conversa_pendente(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: str, texto: str) -> bool:
@@ -2919,7 +3291,8 @@ TUTORIAIS_MENU = {
         "1️⃣ <b>Registre gastos e ganhos</b> escrevendo normalmente: "
         "<i>gastei 50 no mercado</i> ou <i>recebi 2000 de salário</i>.\n\n"
         "2️⃣ <b>Guarde dinheiro</b>: <i>guardar 200</i>. Para sacar: <i>sacar 100 da poupança</i>.\n\n"
-        "3️⃣ <b>Veja como você está</b>: <i>meu saldo</i> ou /resumo.\n\n"
+        "3️⃣ <b>Veja como você está</b>: <i>meu saldo</i> ou /resumo. "
+        "Pergunte também sua <i>previsão para o mês que vem</i> e ative os /alertas de gastos.\n\n"
         "4️⃣ <b>Investimentos</b>: <i>investi 500 em CDB</i>, ou abra o menu de investimentos "
         "para ver notícias, riscos e dicas.\n\n"
         "5️⃣ <b>Tire dúvidas de finanças</b>: pergunte qualquer coisa sobre dinheiro.\n\n"
@@ -2951,6 +3324,32 @@ TUTORIAIS_MENU = {
         "📈 <b>Tutorial: resumo e saldo</b>\n\n"
         "Digite /resumo, <i>meu saldo</i> ou <i>quanto gastei</i>.\n\n"
         "Eu mostro o total recebido, o total gasto, o saldo atual e quanto foi para cada categoria."),
+    "alertas": (
+        "🔔 <b>Tutorial: alertas de gastos</b>\n\n"
+        "Eu te aviso quando seus gastos do mês chegarem perto da sua <b>renda do mês</b>, "
+        "que funciona como o seu teto de gastos.\n\n"
+        "• <b>Perto do teto:</b> aviso ao usar 80% da renda (você pode mudar esse percentual)\n"
+        "• <b>Estourou:</b> aviso ao passar de 100% da renda\n\n"
+        "Cada aviso chega <b>uma vez por mês</b>, pelo Telegram e por e-mail, "
+        "logo depois de você registrar uma despesa.\n\n"
+        "<b>Comandos:</b>\n"
+        "• /alertas para ver como está\n"
+        "• <i>/alertas off</i> para desligar e <i>/alertas on</i> para ligar\n"
+        "• <i>/alertas 90</i> para ser avisada ao usar 90% da renda (aceita de 50 a 99)\n\n"
+        "💡 Os alertas só funcionam depois que você registrar a sua renda do mês, "
+        "por exemplo: <i>recebi 3000 de salário</i>."),
+    "previsao": (
+        "🔮 <b>Tutorial: previsão de gastos</b>\n\n"
+        "Eu estimo quanto você deve gastar no <b>próximo mês</b>, com base nos seus últimos "
+        "3 meses fechados. Os meses mais recentes pesam mais, e contas fixas como moradia "
+        "e internet repetem o último valor.\n\n"
+        "<b>Para consultar, pergunte do seu jeito:</b>\n"
+        "• <i>qual a minha previsão de gasto para o mês que vem?</i>\n"
+        "• <i>quanto vou gastar no próximo mês?</i>\n"
+        "• ou use o comando /previsao\n\n"
+        "Eu mostro o valor previsto, a faixa provável, as maiores categorias e avisos de "
+        "tendência de alta. Quanto mais meses de histórico, mais precisa fica a estimativa.\n\n"
+        "O mesmo resumo aparece no card <b>Análise Preditiva</b> do painel no site."),
     "site": (
         "🌐 <b>Tutorial: painel no site</b>\n\n"
         "Entre no site do Fincash com o mesmo e-mail ou telefone do seu cadastro. Lá você encontra:\n"
@@ -3026,6 +3425,8 @@ def _teclado_menu_principal():
          InlineKeyboardButton("🏷️ Categorias", callback_data="menu:categorias")],
         [InlineKeyboardButton("📈 Resumo e saldo", callback_data="menu:resumo"),
          InlineKeyboardButton("🌐 Painel no site", callback_data="menu:site")],
+        [InlineKeyboardButton("🔔 Alertas", callback_data="menu:alertas"),
+         InlineKeyboardButton("🔮 Previsão", callback_data="menu:previsao")],
     ])
 
 
@@ -3143,6 +3544,8 @@ if __name__ == "__main__":
         app.add_handler(CommandHandler("sacar", comando_sacar))
         app.add_handler(CommandHandler("poupanca", comando_poupanca))
         app.add_handler(CommandHandler("login", processar_mensagem))
+        app.add_handler(CommandHandler("alertas", comando_alertas))
+        app.add_handler(CommandHandler("previsao", comando_previsao))
 
         # Registra tratador de texto E compartilhamento de contatos
         app.add_handler(

@@ -263,11 +263,149 @@
                         </div>
                     </div>
 
+                    <!-- CARD 6: ANÁLISE PREDITIVA -->
+                    <div id="card-previsao"
+                        class="bg-white rounded-2xl p-5 shadow-sm border border-slate-200/80 md:col-span-2 lg:col-span-3">
+                        <div class="flex items-center justify-between mb-5">
+                            <div class="flex items-center gap-3">
+                                <div
+                                    class="w-10 h-10 rounded-xl bg-blue-100 text-blue-600 flex items-center justify-center font-bold text-lg shadow-sm">
+                                    <i class="fa-solid fa-wand-magic-sparkles"></i>
+                                </div>
+                                <h2 class="text-xs font-bold tracking-wider text-slate-600 uppercase">Análise Preditiva
+                                </h2>
+                            </div>
+                            <span id="previsao-confianca"
+                                class="hidden text-xs font-medium text-blue-600 bg-blue-50 px-3 py-1 rounded-full border border-blue-100"></span>
+                        </div>
+
+                        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                            <!-- Valor previsto -->
+                            <div class="flex flex-col justify-center">
+                                <p class="text-sm font-medium text-slate-500">
+                                    Projeção de gastos (<span id="previsao-mes">próximo mês</span>)
+                                </p>
+                                <h3 class="text-3xl font-extrabold text-slate-800 mt-1" id="previsao-valor">—</h3>
+                                <p class="text-xs text-slate-500 mt-2" id="previsao-faixa"></p>
+                                <p class="text-xs text-slate-400 mt-1" id="previsao-base"></p>
+                            </div>
+
+                            <!-- Maiores categorias previstas -->
+                            <div>
+                                <h4 class="text-xs font-bold uppercase tracking-wider text-slate-500 mb-3">Maiores
+                                    categorias previstas</h4>
+                                <div class="space-y-3" id="previsao-categorias">
+                                    <p class="text-sm text-slate-500">Calculando...</p>
+                                </div>
+                            </div>
+
+                            <!-- Avisos -->
+                            <div class="p-3 bg-amber-50 border border-amber-100 rounded-xl self-start">
+                                <p class="text-xs font-bold text-amber-800 mb-2">
+                                    <i class="fa-solid fa-triangle-exclamation mr-1"></i> Atenção
+                                </p>
+                                <ul class="space-y-2" id="previsao-avisos"></ul>
+                            </div>
+                        </div>
+
+                        <p class="text-xs text-slate-400 mt-5 pt-3 border-t border-slate-100">
+                            Estimativa baseada no seu histórico de gastos, não uma garantia.
+                        </p>
+                    </div>
                 </div><!-- fim do grid -->
             </div><!-- fim do container -->
         </main>
     </div>
+    <script>
+            (async function carregarPrevisao() {
+                const brl = v => Number(v).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+                const $ = id => document.getElementById(id);
+                const el = (tag, cls, txt) => {
+                    const e = document.createElement(tag);
+                    if (cls) e.className = cls;
+                    if (txt !== undefined) e.textContent = txt;
+                    return e;
+                };
+                const mostrarAvisos = lista => {
+                    const ul = $('previsao-avisos');
+                    ul.replaceChildren();
+                    lista.forEach(t => {
+                        const li = el('li', 'text-sm text-amber-900 font-medium flex gap-2');
+                        li.appendChild(el('i', 'fa-solid fa-circle-exclamation mt-1 text-amber-500'));
+                        li.appendChild(el('span', null, t));
+                        ul.appendChild(li);
+                    });
+                };
 
+                try {
+                    const resp = await fetch('/api/previsao');
+                    const d = await resp.json();
+                    if (!resp.ok) throw new Error(d.erro || 'erro');
+
+                    $('previsao-categorias').replaceChildren();
+                    if (d.vinculado === false) {
+                        mostrarAvisos(['Vincule seu Telegram para ver a previsão.']);
+                        return;
+                    }
+                    $('previsao-mes').textContent = d.mes_rotulo;
+                    if (!d.disponivel) {
+                        mostrarAvisos(['Registre algumas despesas para liberar a previsão.']);
+                        return;
+                    }
+
+                    $('previsao-valor').textContent = brl(d.previsao);
+                    if (d.faixa_min !== null) {
+                        $('previsao-faixa').textContent = `Faixa provável: ${brl(d.faixa_min)} a ${brl(d.faixa_max)}`;
+                    }
+                    const n = d.meses_base;
+                    $('previsao-base').textContent = d.metodo === 'media_ponderada'
+                        ? `Base: ${n} ${n === 1 ? 'mês fechado' : 'meses fechados'} (os mais recentes pesam mais)`
+                        : 'Base: ritmo de gastos deste mês';
+
+                    const conf = $('previsao-confianca');
+                    conf.textContent = 'Confiança: ' + d.confianca;
+                    conf.classList.remove('hidden');
+
+                    // Categorias (nomes digitados pelo usuário: sempre textContent, nunca innerHTML)
+                    const box = $('previsao-categorias');
+                    if (!d.categorias.length) {
+                        box.appendChild(el('p', 'text-sm text-slate-500', 'Sem detalhamento por categoria ainda.'));
+                    }
+                    d.categorias.forEach(c => {
+                        const pct = d.previsao > 0 ? Math.min(c.previsao / d.previsao * 100, 100) : 0;
+                        const dif = c.previsao - c.ultimo_mes;
+
+                        const linha = el('div');
+                        const topo = el('div', 'flex items-center justify-between text-sm');
+                        const esq = el('div', 'flex items-center gap-2 min-w-0');
+                        esq.appendChild(el('span', 'font-semibold text-slate-700 truncate', c.categoria));
+                        esq.appendChild(el('span',
+                            'text-[10px] font-medium px-1.5 py-0.5 rounded bg-slate-100 text-slate-500',
+                            c.tipo === 'fixa' ? 'Fixa' : 'Variável'));
+                        topo.appendChild(esq);
+                        topo.appendChild(el('span', 'font-bold text-slate-800', brl(c.previsao)));
+                        linha.appendChild(topo);
+
+                        const trilho = el('div', 'w-full bg-slate-100 h-1.5 rounded-full overflow-hidden mt-1.5');
+                        const barra = el('div', 'bg-blue-500 h-full rounded-full');
+                        barra.style.width = pct.toFixed(1) + '%';
+                        trilho.appendChild(barra);
+                        linha.appendChild(trilho);
+
+                        if (Math.abs(dif) >= 1) {
+                            linha.appendChild(el('p',
+                                'text-[11px] mt-1 ' + (dif > 0 ? 'text-red-500' : 'text-emerald-600'),
+                                `${dif > 0 ? '▲' : '▼'} ${brl(Math.abs(dif))} em relação ao último mês`));
+                        }
+                        box.appendChild(linha);
+                    });
+
+                    mostrarAvisos(d.avisos);
+                } catch (e) {
+                    mostrarAvisos(['Não foi possível carregar a previsão agora.']);
+                }
+            })();
+    </script>
     <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
 </body>
 
