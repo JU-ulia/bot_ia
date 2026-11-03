@@ -70,39 +70,59 @@
                 </button>
                 <h1 class="text-2xl font-bold text-slate-800 tracking-tight">Transações</h1>
             </div>
-            <div class="flex items-center gap-3">
-                <div class="flex items-center bg-slate-50 p-2 rounded-xl border border-slate-200">
-                    <i class="fa-solid fa-calendar-days text-slate-500 pl-2 pr-1"></i>
-                    <input type="month" id="filtro-mes" class="bg-transparent text-sm font-semibold text-slate-700 focus:outline-none cursor-pointer pr-2" />
-                </div>
-                <button id="btn-limpar-mes" class="hidden text-sm font-medium text-blue-600 hover:text-blue-500">Todo o período</button>
-            </div>
+
+            <!-- Conta logada (leva ao perfil) -->
+            <a href="/perfil" class="flex items-center gap-3" title="Meu perfil">
+                <span class="font-medium text-slate-700 hidden sm:inline-block" id="user-name"></span>
+                <img src="https://placehold.co/100x100/2563eb/ffffff?text=U" alt="Perfil do Usuário"
+                    class="w-10 h-10 rounded-full border-2 border-blue-500 shadow-sm object-cover">
+            </a>
         </header>
 
         <main class="flex-1 overflow-y-auto p-4 md:p-6 bg-slate-100">
             <div class="max-w-7xl mx-auto space-y-6">
 
-                <!-- Resumo do filtro atual -->
-                <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <!-- Saldo atual (não depende do filtro de datas) -->
+                <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-200/80 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                    <div class="flex items-center gap-4">
+                        <div class="w-12 h-12 rounded-xl bg-blue-100 text-blue-600 flex items-center justify-center text-xl"><i class="fa-solid fa-scale-balanced"></i></div>
+                        <div>
+                            <span class="text-xs font-semibold text-slate-400">Saldo atual</span>
+                            <p class="text-2xl font-extrabold text-slate-800" id="total-saldo">R$ 0,00</p>
+                        </div>
+                    </div>
+                    <a href="/orcamentos" class="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-full bg-blue-50 text-blue-600 border border-blue-100 font-semibold text-sm hover:bg-blue-100 transition">
+                        <i class="fa-solid fa-piggy-bank"></i> Guardar dinheiro
+                    </a>
+                </div>
+
+                <hr class="border-slate-200">
+
+                <!-- Resumo do período -->
+                <div class="flex items-center justify-between gap-3">
+                    <h2 class="text-sm font-bold text-slate-700">Resumo do período</h2>
+                    <div class="flex items-center gap-3">
+                        <button id="btn-limpar-mes" class="hidden text-sm font-medium text-blue-600 hover:text-blue-500">Todo o período</button>
+                        <div class="flex items-center bg-white p-2 rounded-xl border border-slate-200 shadow-sm">
+                            <i class="fa-solid fa-calendar-days text-slate-500 pl-2 pr-1"></i>
+                            <input type="month" id="filtro-mes" class="bg-transparent text-sm font-semibold text-slate-700 focus:outline-none cursor-pointer pr-2" />
+                        </div>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-200/80 flex items-center gap-4">
                         <div class="w-12 h-12 rounded-xl bg-emerald-100 text-emerald-600 flex items-center justify-center text-xl"><i class="fa-solid fa-arrow-down"></i></div>
                         <div>
                             <span class="text-xs font-semibold text-slate-400">Entradas</span>
-                            <p class="text-xl font-extrabold text-emerald-600" id="total-entradas">R$ 0,00</p>
+                            <p class="text-2xl font-extrabold text-emerald-600" id="total-entradas">R$ 0,00</p>
                         </div>
                     </div>
                     <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-200/80 flex items-center gap-4">
                         <div class="w-12 h-12 rounded-xl bg-red-100 text-red-500 flex items-center justify-center text-xl"><i class="fa-solid fa-arrow-up"></i></div>
                         <div>
                             <span class="text-xs font-semibold text-slate-400">Saídas</span>
-                            <p class="text-xl font-extrabold text-red-500" id="total-saidas">R$ 0,00</p>
-                        </div>
-                    </div>
-                    <div class="bg-white rounded-2xl p-5 shadow-sm border border-slate-200/80 flex items-center gap-4">
-                        <div class="w-12 h-12 rounded-xl bg-blue-100 text-blue-600 flex items-center justify-center text-xl"><i class="fa-solid fa-scale-balanced"></i></div>
-                        <div>
-                            <span class="text-xs font-semibold text-slate-400">Saldo</span>
-                            <p class="text-xl font-extrabold text-slate-800" id="total-saldo">R$ 0,00</p>
+                            <p class="text-2xl font-extrabold text-red-500" id="total-saidas">R$ 0,00</p>
                         </div>
                     </div>
                 </div>
@@ -114,6 +134,7 @@
                             <button data-tipo="" class="px-4 py-1.5 rounded-lg bg-white text-slate-800 shadow-sm">Todas</button>
                             <button data-tipo="renda" class="px-4 py-1.5 rounded-lg text-slate-500 hover:text-slate-800">Entradas</button>
                             <button data-tipo="despesa" class="px-4 py-1.5 rounded-lg text-slate-500 hover:text-slate-800">Saídas</button>
+                            <button data-tipo="poupanca" class="px-4 py-1.5 rounded-lg text-slate-500 hover:text-slate-800">Poupança</button>
                         </div>
                         <div class="relative md:w-72">
                             <i class="fa-solid fa-magnifying-glass absolute left-3.5 top-3.5 text-slate-400 text-sm"></i>
@@ -168,10 +189,22 @@
         let transacoes = [];
         let tipoAtual = '';
         let mes = '';
+        let semVinculo = false;
+        let saldoAtual = 0;
 
         const elMes = document.getElementById('filtro-mes');
         const elLimpar = document.getElementById('btn-limpar-mes');
         const elBusca = document.getElementById('busca');
+
+        // Nome da conta logada no cabeçalho
+        async function carregarUsuario() {
+            try {
+                const res = await fetch('/api/usuario-atual');
+                if (!res.ok) return;
+                const d = await res.json();
+                document.getElementById('user-name').textContent = d.nome || '';
+            } catch (e) { /* o nome é só um detalhe visual */ }
+        }
 
         async function carregar() {
             try {
@@ -183,12 +216,13 @@
                 if (!res.ok) throw new Error(data.erro || 'Falha ao carregar');
                 transacoes = data.transacoes;
                 semVinculo = !data.vinculado;
+                // Saldo atual: sempre acumulado de todos os meses (o servidor ignora o filtro de data)
+                saldoAtual = data.vinculado ? Number(data.saldo_disponivel) : 0;
                 render();
             } catch (e) {
                 mostrarEstado('fa-triangle-exclamation', 'Não foi possível carregar as transações', 'Verifique sua conexão e recarregue a página.');
             }
         }
-        let semVinculo = false;
 
         function filtradas() {
             const q = elBusca.value.trim().toLowerCase();
@@ -209,16 +243,21 @@
         }
 
         function render() {
-            const lista = filtradas();
+            // Saldo atual: independe de mês, tipo e busca
+            const elSaldo = document.getElementById('total-saldo');
+            elSaldo.textContent = brl(saldoAtual);
+            elSaldo.className = 'text-2xl font-extrabold ' + (saldoAtual < 0 ? 'text-red-500' : 'text-slate-800');
 
+            // Entradas e saídas: só o mês escolhido (ignora filtro de tipo e busca)
             let entradas = 0, saidas = 0;
-            lista.forEach(t => { t.tipo === 'renda' ? entradas += t.valor : saidas += t.valor; });
+            transacoes.forEach(t => {
+                if (t.tipo === 'renda') entradas += t.valor;
+                else if (t.tipo === 'despesa') saidas += t.valor;
+            });
             document.getElementById('total-entradas').textContent = brl(entradas);
             document.getElementById('total-saidas').textContent = brl(saidas);
-            const saldo = entradas - saidas;
-            const elSaldo = document.getElementById('total-saldo');
-            elSaldo.textContent = brl(saldo);
-            elSaldo.className = 'text-xl font-extrabold ' + (saldo < 0 ? 'text-red-500' : 'text-slate-800');
+
+            const lista = filtradas();
 
             if (semVinculo) {
                 mostrarEstado('fa-link', 'Telegram ainda não vinculado', 'Envie /login no Telegram para ver seus lançamentos aqui.');
@@ -234,36 +273,50 @@
 
             document.getElementById('estado').classList.add('hidden');
 
-            document.getElementById('tabela-corpo').innerHTML = lista.map(t => {
+            const estilo = (t) => {
+                if (t.tipo === 'poupanca') {
+                    const guardou = t.sentido === 'deposito';
+                    return { poup: true, cor: 'text-sky-600', bg: 'bg-sky-100 text-sky-600',
+                             icone: 'fa-piggy-bank', rotulo: guardou ? 'Guardado' : 'Retirado',
+                             sinal: guardou ? '+' : '-' };
+                }
                 const entrada = t.tipo === 'renda';
+                return { poup: false, cor: entrada ? 'text-emerald-600' : 'text-red-500',
+                         bg: entrada ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-500',
+                         icone: entrada ? 'fa-arrow-down' : 'fa-arrow-up',
+                         rotulo: entrada ? 'Entrada' : 'Saída', sinal: entrada ? '+' : '-' };
+            };
+
+            document.getElementById('tabela-corpo').innerHTML = lista.map(t => {
+                const s = estilo(t);
                 return `
                 <tr class="hover:bg-slate-50">
-                    <td class="px-5 py-3.5 font-semibold text-slate-500">#${String(t.id).padStart(2, '0')}</td>
+                    <td class="px-5 py-3.5 font-semibold text-slate-500">${s.poup ? '—' : '#' + String(t.id).padStart(2, '0')}</td>
                     <td class="px-5 py-3.5 text-slate-600 whitespace-nowrap">${esc(t.data_fmt)}</td>
                     <td class="px-5 py-3.5 font-medium text-slate-800">${esc(t.descricao) || '<span class="text-slate-400">Sem descrição</span>'}</td>
                     <td class="px-5 py-3.5"><span class="px-2.5 py-1 rounded-lg bg-slate-100 text-slate-600 text-xs font-medium">${esc(t.categoria) || 'Sem categoria'}</span></td>
                     <td class="px-5 py-3.5">
-                        <span class="inline-flex items-center gap-1.5 text-xs font-semibold ${entrada ? 'text-emerald-600' : 'text-red-500'}">
-                            <i class="fa-solid ${entrada ? 'fa-arrow-down' : 'fa-arrow-up'}"></i>${entrada ? 'Entrada' : 'Saída'}
+                        <span class="inline-flex items-center gap-1.5 text-xs font-semibold ${s.cor}">
+                            <i class="fa-solid ${s.icone}"></i>${s.rotulo}
                         </span>
                     </td>
-                    <td class="px-5 py-3.5 text-right font-bold whitespace-nowrap ${entrada ? 'text-emerald-600' : 'text-red-500'}">${entrada ? '+' : '-'} ${brl(t.valor)}</td>
+                    <td class="px-5 py-3.5 text-right font-bold whitespace-nowrap ${s.cor}">${s.sinal} ${brl(t.valor)}</td>
                 </tr>`;
             }).join('');
 
             document.getElementById('lista-mobile').innerHTML = lista.map(t => {
-                const entrada = t.tipo === 'renda';
+                const s = estilo(t);
                 return `
                 <div class="p-4 flex items-start gap-3">
-                    <div class="w-10 h-10 shrink-0 rounded-xl flex items-center justify-center ${entrada ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-500'}">
-                        <i class="fa-solid ${entrada ? 'fa-arrow-down' : 'fa-arrow-up'}"></i>
+                    <div class="w-10 h-10 shrink-0 rounded-xl flex items-center justify-center ${s.bg}">
+                        <i class="fa-solid ${s.icone}"></i>
                     </div>
                     <div class="min-w-0 flex-1">
                         <p class="font-semibold text-slate-800 truncate">${esc(t.descricao) || 'Sem descrição'}</p>
                         <p class="text-xs text-slate-500 mt-0.5">${esc(t.categoria) || 'Sem categoria'} • ${esc(t.data_fmt)}</p>
-                        <p class="text-xs text-slate-400 mt-0.5">ID #${String(t.id).padStart(2, '0')}</p>
+                        ${s.poup ? '' : `<p class="text-xs text-slate-400 mt-0.5">ID #${String(t.id).padStart(2, '0')}</p>`}
                     </div>
-                    <p class="font-bold whitespace-nowrap ${entrada ? 'text-emerald-600' : 'text-red-500'}">${entrada ? '+' : '-'} ${brl(t.valor)}</p>
+                    <p class="font-bold whitespace-nowrap ${s.cor}">${s.sinal} ${brl(t.valor)}</p>
                 </div>`;
             }).join('');
 
@@ -298,6 +351,7 @@
             carregar();
         });
 
+        carregarUsuario();
         carregar();
     </script>
 </body>

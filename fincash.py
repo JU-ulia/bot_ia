@@ -505,7 +505,7 @@ def api_transacoes():
         with conexao.cursor() as cursor:
             query = """
                 SELECT id, tipo, valor, categoria, descricao,
-                       TO_CHAR(data, 'DD/MM/YYYY HH24:MI')
+                       TO_CHAR(data, 'DD/MM/YYYY HH24:MI'), data
                 FROM transactions
                 WHERE TRIM(telegram_id) = %s
             """
@@ -516,16 +516,57 @@ def api_transacoes():
             query += " ORDER BY data DESC NULLS LAST, id DESC LIMIT 1000;"
             cursor.execute(query, params)
             linhas = cursor.fetchall()
+
+            # Movimentos da poupança entram no extrato (mesmo filtro de mês)
+            sql_p = """
+                SELECT id, tipo, valor, descricao, TO_CHAR(data, 'DD/MM/YYYY HH24:MI'), data
+                FROM savings_movements
+                WHERE TRIM(telegram_id) = %s
+            """
+            params_p = [telegram_id]
+            if mes:
+                sql_p += " AND TO_CHAR(data, 'YYYY-MM') = %s"
+                params_p.append(mes)
+            sql_p += " ORDER BY data DESC, id DESC LIMIT 1000;"
+            cursor.execute(sql_p, params_p)
+            movs = cursor.fetchall()
+
+            disponivel = saldo_disponivel(cursor, telegram_id)
+            guardado = saldo_poupanca(cursor, telegram_id)
+
+            sql_mov = """
+                SELECT COALESCE(SUM(CASE WHEN tipo = 'deposito' THEN valor ELSE -valor END), 0)
+                FROM savings_movements WHERE TRIM(telegram_id) = %s
+            """
+            params_mov = [telegram_id]
+            if mes:
+                sql_mov += " AND TO_CHAR(data, 'YYYY-MM') = %s"
+                params_mov.append(mes)
+            cursor.execute(sql_mov, params_mov)
+            poupanca_periodo = float(cursor.fetchone()[0])
     finally:
         conexao.close()
 
+    itens = []
+    for r in linhas:
+        itens.append((r[6], 1, r[0], {
+            "id": r[0], "tipo": r[1], "valor": float(r[2]), "categoria": r[3],
+            "descricao": r[4], "data_fmt": r[5] or ""}))
+    for r in movs:
+        guardou = r[1] == 'deposito'
+        itens.append((r[5], 0, r[0], {
+            "id": r[0], "tipo": "poupanca", "sentido": r[1], "valor": float(r[2]),
+            "categoria": "Poupança",
+            "descricao": r[3] or ("Guardado na poupança" if guardou else "Retirado da poupança"),
+            "data_fmt": r[4] or ""}))
+    itens.sort(key=lambda x: (x[0] or datetime.min, x[1], x[2]), reverse=True)
+
     return jsonify({
         "vinculado": True,
-        "transacoes": [
-            {"id": r[0], "tipo": r[1], "valor": float(r[2]), "categoria": r[3],
-             "descricao": r[4], "data_fmt": r[5] or ""}
-            for r in linhas
-        ]
+        "saldo_disponivel": round(disponivel, 2),
+        "poupanca": round(guardado, 2),
+        "poupanca_periodo": round(poupanca_periodo, 2),
+        "transacoes": [i[3] for i in itens]
     })
 
 # ==========================================
@@ -634,19 +675,34 @@ def saldo_poupanca(cursor, telegram_id) -> float:
     return float(cursor.fetchone()[0])
 
 
+def saldo_disponivel(cursor, telegram_id) -> float:
+    """Saldo livre para guardar: receitas - despesas - o que já está na poupança (mesma regra do dashboard)."""
+    cursor.execute("""
+        SELECT COALESCE(SUM(CASE WHEN tipo = 'renda' THEN valor
+                                 WHEN tipo = 'despesa' THEN -valor END), 0)
+        FROM transactions WHERE TRIM(telegram_id) = %s;
+    """, (telegram_id,))
+    return float(cursor.fetchone()[0]) - saldo_poupanca(cursor, telegram_id)
+
+
 def registrar_movimento_poupanca(telegram_id, tipo, valor, descricao=None):
-    """Guarda ('deposito') ou saca ('saque') da poupança. Saque maior que o saldo é recusado.
-    Retorna {"ok": True, "id", "saldo", "meta"} ou {"ok": False, "saldo"}."""
+    """Guarda ('deposito') ou saca ('saque') da poupança.
+    Depósito maior que o saldo disponível e saque maior que o guardado são recusados."""
     telegram_id = str(telegram_id).strip()
     conexao = obter_conexao()
     try:
         with conexao.cursor() as cursor:
-            # trava por usuário: duas mensagens simultâneas não conseguem sacar além do saldo
+            # trava por usuário: duas mensagens simultâneas não conseguem passar do saldo
             cursor.execute("SELECT pg_advisory_xact_lock(hashtext(%s));", (telegram_id,))
             saldo = saldo_poupanca(cursor, telegram_id)
             if tipo == 'saque' and round(valor, 2) > round(saldo, 2):
                 conexao.rollback()
-                return {"ok": False, "saldo": saldo}
+                return {"ok": False, "motivo": "sem_poupanca", "saldo": saldo}
+            livre = saldo_disponivel(cursor, telegram_id)
+            if tipo == 'deposito':
+                if round(valor, 2) > round(livre, 2):
+                    conexao.rollback()
+                    return {"ok": False, "motivo": "sem_saldo", "saldo": saldo, "saldo_livre": livre}
             cursor.execute("""
                 INSERT INTO savings_movements (telegram_id, tipo, valor, descricao)
                 VALUES (%s, %s, %s, %s) RETURNING id;
@@ -656,7 +712,9 @@ def registrar_movimento_poupanca(telegram_id, tipo, valor, descricao=None):
             row = cursor.fetchone()
         conexao.commit()
         novo_saldo = saldo + valor if tipo == 'deposito' else saldo - valor
+        novo_livre = livre - valor if tipo == 'deposito' else livre + valor
         return {"ok": True, "id": novo_id, "saldo": round(novo_saldo, 2),
+                "saldo_livre": round(novo_livre, 2),
                 "meta": float(row[0]) if row else None}
     except Exception:
         conexao.rollback()
@@ -2444,10 +2502,12 @@ async def comando_resumo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """, (user_id,))
     categorias = cursor.fetchall()
 
+    guardado = saldo_poupanca(cursor, user_id)
+
     cursor.close()
     conexao.close()
 
-    saldo = total_renda - total_despesas
+    saldo = float(total_renda) - float(total_despesas) - guardado
     alerta_saldo = "⚠️ **Atenção:** Seus gastos superaram a sua renda!" if saldo < 0 else "✅ **Saúde Financeira:** Saldo positivo!"
 
     texto_categorias = "\n".join([f"• **{cat}:** R$ {val:.2f}" for cat, val in categorias]) or "Nenhuma despesa registrada."
@@ -2456,6 +2516,7 @@ async def comando_resumo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📊 **SEU BALANÇO FINANCEIRO**\n\n"
         f"💵 **Total Recebido (Renda):** R$ {total_renda:.2f}\n"
         f"💸 **Total Gasto (Despesas):** R$ {total_despesas:.2f}\n"
+        f"🐷 **Guardado na poupança:** R$ {guardado:.2f}\n"
         f"⚖️ **Saldo Atual:** R$ {saldo:.2f}\n\n"
         f"{alerta_saldo}\n\n"
         f"📁 **Gastos por Categoria:**\n"
@@ -3175,8 +3236,21 @@ async def responder_movimento_poupanca(update: Update, user_id: str, tipo: str, 
         return
 
     if not r["ok"]:
-        await update.message.reply_text(
-            f"❌ Saldo insuficiente na poupança. Você tem {fmt_brl(r['saldo'])} guardado.")
+        if r.get("motivo") == "sem_saldo":
+            livre = r["saldo_livre"]
+            if livre <= 0:
+                situacao = ("Você está sem saldo disponível no momento"
+                            + (", e seus gastos já superam a sua renda." if livre < 0 else "."))
+            else:
+                situacao = f"Seu saldo disponível é de apenas {fmt_brl(livre)}."
+            await update.message.reply_text(
+                f"❌ Não consegui guardar {fmt_brl(valor)} na poupança.\n\n"
+                f"{situacao}\n"
+                "Só dá para guardar dinheiro que você realmente tem sobrando. "
+                "Registre sua renda (ex.: recebi 3000 de salário) ou guarde um valor menor.")
+        else:
+            await update.message.reply_text(
+                f"❌ Saldo insuficiente na poupança. Você tem {fmt_brl(r['saldo'])} guardado.")
         return
 
     if tipo == 'deposito':
@@ -3184,6 +3258,7 @@ async def responder_movimento_poupanca(update: Update, user_id: str, tipo: str, 
     else:
         linhas = [f"💸 **Retirada registrada!** -{fmt_brl(valor)} da poupança."]
     linhas.append(f"💰 **Total guardado:** {fmt_brl(r['saldo'])}")
+    linhas.append(f"💵 **Saldo disponível:** {fmt_brl(r['saldo_livre'])}")
     if r["meta"]:
         linhas.append(f"🎯 **Meta:** {min(r['saldo'] / r['meta'] * 100, 100):.0f}% de {fmt_brl(r['meta'])}")
     await update.message.reply_text("\n".join(linhas), parse_mode="Markdown")
