@@ -33,6 +33,7 @@ import math
 import csv
 import io
 import secrets
+import hashlib
 from urllib.parse import urlparse
 
 import investimentos
@@ -411,6 +412,18 @@ def criar_tabelas():
             nivel VARCHAR(10) NOT NULL,
             enviado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             UNIQUE (telegram_id, mes, nivel)
+        );
+        """)
+
+        # Tokens de recuperação de senha (guarda só o HASH do token, nunca o token em si)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS password_resets (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            token_hash CHAR(64) NOT NULL UNIQUE,
+            expira_em TIMESTAMP NOT NULL,
+            usado BOOLEAN NOT NULL DEFAULT FALSE,
+            criado_em TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         );
         """)
 
@@ -1791,6 +1804,225 @@ def alterar_senha():
         conexao.close()
 
     return jsonify({"sucesso": True, "mensagem": "Senha alterada com sucesso!"})
+
+# ==========================================
+# 4.7 RECUPERAÇÃO DE SENHA (link por e-mail)
+# ==========================================
+RESET_VALIDADE_MIN = 30
+APP_BASE_URL = os.getenv("APP_BASE_URL", "").rstrip("/")   # ex.: https://fincash.com.br (defina no .env em produção)
+
+_TENTATIVAS_RESET = {}
+_RESET_MAX = 5
+_RESET_JANELA_SEG = 900
+_reset_lock = threading.Lock()
+
+
+def _reset_limitado(chave) -> bool:
+    """Máx. 5 pedidos de recuperação a cada 15 min por IP+identificador (evita spam de e-mails)."""
+    agora = time.time()
+    with _reset_lock:
+        pedidos = [t for t in _TENTATIVAS_RESET.get(chave, []) if agora - t < _RESET_JANELA_SEG]
+        if len(pedidos) >= _RESET_MAX:
+            _TENTATIVAS_RESET[chave] = pedidos
+            return True
+        pedidos.append(agora)
+        _TENTATIVAS_RESET[chave] = pedidos
+        return False
+
+
+def _hash_token(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def montar_email_recuperacao(nome, email, link):
+    msg = Message(subject="Fincash: alguém tentou acessar sua conta", recipients=[email])
+    msg.body = (
+        f"Olá, {nome}!\n\n"
+        "Alguém solicitou a recuperação de senha da sua conta no Fincash.\n\n"
+        f"Se foi você, abra o link abaixo para criar uma nova senha (vale por {RESET_VALIDADE_MIN} minutos):\n{link}\n\n"
+        "Se NÃO foi você, ignore este e-mail: sua senha continua a mesma e ninguém acessou sua conta."
+    )
+    nome_seguro = escapar_html(nome)
+    msg.html = f"""
+    <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: 0 auto; border: 1px solid #e0e0e0; border-radius: 8px; padding: 20px;">
+        <h2 style="color: #2563eb; text-align: center;">fincash</h2>
+        <hr style="border: 0; border-top: 1px solid #eee;">
+        <p>Olá, <strong>{nome_seguro}</strong>!</p>
+        <p><strong>Alguém está tentando acessar sua conta</strong> no Fincash (pedido de recuperação de senha).</p>
+        <p>Se foi você, clique no botão abaixo para criar uma nova senha:</p>
+        <p style="text-align: center; margin: 28px 0;">
+            <a href="{link}" style="background-color: #2563eb; color: #ffffff; padding: 14px 28px; border-radius: 8px; text-decoration: none; font-weight: bold; display: inline-block;">
+                Sim, fui eu — criar nova senha
+            </a>
+        </p>
+        <p style="font-size: 13px; color: #64748b;">Este link vale por {RESET_VALIDADE_MIN} minutos e só pode ser usado uma vez.<br>
+        Se o botão não funcionar, copie e cole este endereço no navegador:<br>
+        <span style="word-break: break-all;">{link}</span></p>
+        <div style="background-color: #f8fafc; padding: 15px; border-left: 4px solid #ef4444; margin: 20px 0; border-radius: 4px;">
+            <p style="margin: 0; font-size: 14px; color: #475569;">
+                ⚠️ <strong>Não foi você?</strong><br>
+                Ignore este e-mail: sua senha continua a mesma e ninguém acessou sua conta.
+                Se receber vários avisos assim, fale com nosso SAC:
+                <a href="mailto:{SAC_EMAIL}" style="color: #ef4444; font-weight: bold;">{SAC_EMAIL}</a>
+            </p>
+        </div>
+    </div>
+    """
+    return msg
+
+
+def montar_email_senha_alterada(nome, email):
+    msg = Message(subject="Fincash: sua senha foi alterada", recipients=[email])
+    msg.body = (
+        f"Olá, {nome}!\n\nA senha da sua conta no Fincash acabou de ser alterada.\n"
+        f"Se não foi você, entre em contato imediatamente com o SAC: {SAC_EMAIL}"
+    )
+    msg.html = f"""
+    <div style="font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: 0 auto; border: 1px solid #e0e0e0; border-radius: 8px; padding: 20px;">
+        <h2 style="color: #2563eb; text-align: center;">fincash</h2>
+        <hr style="border: 0; border-top: 1px solid #eee;">
+        <p>Olá, <strong>{escapar_html(nome)}</strong>!</p>
+        <p>A senha da sua conta no Fincash <strong>acabou de ser alterada</strong>.</p>
+        <div style="background-color: #f8fafc; padding: 15px; border-left: 4px solid #ef4444; margin: 20px 0; border-radius: 4px;">
+            <p style="margin: 0; font-size: 14px; color: #475569;">
+                ⚠️ <strong>Não foi você?</strong> Entre em contato agora com o SAC:
+                <a href="mailto:{SAC_EMAIL}" style="color: #ef4444; font-weight: bold;">{SAC_EMAIL}</a>
+            </p>
+        </div>
+    </div>
+    """
+    return msg
+
+
+@app_web.route('/api/esqueci-senha', methods=['POST'])
+def esqueci_senha():
+    dados = request.get_json(silent=True) or {}
+    identifier = str(dados.get('identifier', '')).strip()
+    resposta_generica = jsonify({
+        "sucesso": True,
+        "mensagem": "Se houver uma conta com esses dados, enviamos um link de recuperação para o e-mail cadastrado."
+    })
+
+    if not identifier:
+        return jsonify({"erro": "Informe seu e-mail ou telefone."}), 400
+
+    if _reset_limitado(f"{request.remote_addr}|{identifier.lower()}"):
+        return jsonify({"erro": "Muitos pedidos. Aguarde alguns minutos e tente de novo."}), 429
+
+    telefone_limpo = limpar_telefone(identifier)
+    conexao = obter_conexao()
+    cursor = conexao.cursor()
+    try:
+        cursor.execute("""
+            SELECT id, nome, email FROM users
+            WHERE LOWER(email) = LOWER(%s) OR telefone = %s;
+        """, (identifier, telefone_limpo))
+        user = cursor.fetchone()
+
+        # Resposta idêntica exista a conta ou não (não revela quem é cliente)
+        if not user or not user[2]:
+            return resposta_generica
+
+        user_id, nome, email = user
+        token = secrets.token_urlsafe(32)
+
+        # Só o link mais recente vale: invalida pedidos anteriores ainda abertos
+        cursor.execute("UPDATE password_resets SET usado = TRUE WHERE user_id = %s AND usado = FALSE;", (user_id,))
+        cursor.execute("""
+            INSERT INTO password_resets (user_id, token_hash, expira_em)
+            VALUES (%s, %s, NOW() + (%s * INTERVAL '1 minute'));
+        """, (user_id, _hash_token(token), RESET_VALIDADE_MIN))
+        conexao.commit()
+    except Exception:
+        conexao.rollback()
+        traceback.print_exc()
+        return jsonify({"erro": "Não foi possível processar agora. Tente novamente em instantes."}), 500
+    finally:
+        cursor.close()
+        conexao.close()
+
+    base = APP_BASE_URL or request.host_url.rstrip("/")
+    link = f"{base}/redefinir-senha?token={token}"
+    msg = montar_email_recuperacao(nome, email, link)
+    threading.Thread(target=enviar_email_async, args=(app_web, msg), daemon=True).start()
+    return resposta_generica
+
+
+def _token_reset_valido(token: str) -> bool:
+    if not token:
+        return False
+    conexao = obter_conexao()
+    try:
+        with conexao.cursor() as cursor:
+            cursor.execute("""
+                SELECT 1 FROM password_resets
+                WHERE token_hash = %s AND usado = FALSE AND expira_em > NOW();
+            """, (_hash_token(token),))
+            return cursor.fetchone() is not None
+    finally:
+        conexao.close()
+
+
+@app_web.route('/redefinir-senha')
+def redefinir_senha_page():
+    token = request.args.get('token', '').strip()
+    resp = Response(render_template('redefinir_senha.html', token_valido=_token_reset_valido(token)))
+    resp.headers['Cache-Control'] = 'no-store'
+    resp.headers['Referrer-Policy'] = 'no-referrer'
+    return resp
+
+
+@app_web.route('/api/redefinir-senha', methods=['POST'])
+def redefinir_senha():
+    dados = request.get_json(silent=True) or {}
+    token = str(dados.get('token', '')).strip()
+    nova_senha = str(dados.get('password', '')).strip()
+    confirmar = str(dados.get('confirm', '')).strip()
+
+    if not token or not nova_senha or not confirmar:
+        return jsonify({"erro": "Preencha todos os campos."}), 400
+    if len(nova_senha) < 6:
+        return jsonify({"erro": "A senha precisa ter pelo menos 6 caracteres."}), 400
+    if nova_senha != confirmar:
+        return jsonify({"erro": "As senhas não coincidem."}), 400
+
+    conexao = obter_conexao()
+    cursor = conexao.cursor()
+    try:
+        # Consome o token de forma atômica (impede uso duplo mesmo com dois cliques simultâneos)
+        cursor.execute("""
+            UPDATE password_resets SET usado = TRUE
+            WHERE token_hash = %s AND usado = FALSE AND expira_em > NOW()
+            RETURNING user_id;
+        """, (_hash_token(token),))
+        row = cursor.fetchone()
+        if not row:
+            conexao.rollback()
+            return jsonify({"erro": "Este link expirou ou já foi usado. Solicite um novo."}), 400
+
+        user_id = row[0]
+        cursor.execute("UPDATE users SET senha = %s WHERE id = %s RETURNING nome, email;",
+                       (generate_password_hash(nova_senha), user_id))
+        nome, email = cursor.fetchone()
+
+        cursor.execute("UPDATE password_resets SET usado = TRUE WHERE user_id = %s AND usado = FALSE;", (user_id,))
+        cursor.execute("""
+            INSERT INTO dados_salvos (user_id, tipo_operacao, dados_antigos, dados_novos)
+            VALUES (%s, %s, %s, %s);
+        """, (user_id, 'RECUPERACAO_SENHA', json.dumps({"campo": "senha"}), json.dumps({"campo": "senha", "alterada": True})))
+        conexao.commit()
+    except Exception:
+        conexao.rollback()
+        traceback.print_exc()
+        return jsonify({"erro": "Não foi possível redefinir a senha agora. Tente novamente."}), 500
+    finally:
+        cursor.close()
+        conexao.close()
+
+    if email:
+        threading.Thread(target=enviar_email_async, args=(app_web, montar_email_senha_alterada(nome, email)), daemon=True).start()
+    return jsonify({"sucesso": True, "mensagem": "Senha redefinida com sucesso!"})
+
 
 # 5. Logout
 @app_web.route('/logout')

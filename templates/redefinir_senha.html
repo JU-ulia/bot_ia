@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="referrer" content="no-referrer">
+    <meta name="robots" content="noindex">
+    <title>fincash - Criar nova senha</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <style>body { font-family: 'Inter', sans-serif; }</style>
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen flex items-center justify-center p-4">
+
+    <div class="w-full max-w-md bg-slate-800 rounded-2xl shadow-2xl border border-slate-700/60 p-8">
+
+        <!-- Logo -->
+        <div class="flex items-center justify-center gap-3 mb-8">
+            <div class="bg-blue-600 p-2.5 rounded-xl text-white shadow-lg">
+                <i class="fa-solid fa-chart-line text-2xl"></i>
+            </div>
+            <span class="text-3xl font-extrabold tracking-tight text-white">fincash</span>
+        </div>
+
+        <div id="alert-box" class="hidden p-3 mb-4 text-sm rounded-xl"></div>
+
+        {% if token_valido %}
+        <!-- Link válido: formulário de nova senha -->
+        <div id="reset-area">
+            <h1 class="text-xl font-bold text-white mb-1">Criar nova senha</h1>
+            <p class="text-sm text-slate-400 mb-6">
+                Alguém pediu para recuperar o acesso à sua conta. Se foi você, escolha uma nova senha abaixo.
+            </p>
+
+            <form id="form-reset" onsubmit="handleReset(event)" class="space-y-4">
+                <div>
+                    <label class="block text-xs font-semibold uppercase text-slate-400 mb-1">Nova senha</label>
+                    <div class="relative">
+                        <i class="fa-solid fa-lock absolute left-3.5 top-3.5 text-slate-500"></i>
+                        <input type="password" id="new-password" minlength="6" required placeholder="Mínimo 6 caracteres" class="w-full pl-10 pr-4 py-2.5 bg-slate-900 border border-slate-700 rounded-xl focus:outline-none focus:border-blue-500 text-white placeholder-slate-500">
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block text-xs font-semibold uppercase text-slate-400 mb-1">Repita a nova senha</label>
+                    <div class="relative">
+                        <i class="fa-solid fa-lock absolute left-3.5 top-3.5 text-slate-500"></i>
+                        <input type="password" id="confirm-password" minlength="6" required placeholder="••••••••" class="w-full pl-10 pr-4 py-2.5 bg-slate-900 border border-slate-700 rounded-xl focus:outline-none focus:border-blue-500 text-white placeholder-slate-500">
+                    </div>
+                </div>
+
+                <button type="submit" id="reset-btn" class="w-full py-3 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-60 text-white font-bold rounded-xl transition duration-200 shadow-lg shadow-emerald-600/30">
+                    Salvar nova senha
+                </button>
+            </form>
+
+            <p class="text-xs text-slate-500 mt-5 text-center">
+                <i class="fa-solid fa-shield-halved mr-1"></i>
+                Não foi você? Basta fechar esta página: sua senha atual continua valendo.
+            </p>
+        </div>
+        {% else %}
+        <!-- Link inválido / expirado / já usado -->
+        <div class="text-center">
+            <div class="mx-auto mb-4 w-14 h-14 rounded-full bg-red-500/20 text-red-300 flex items-center justify-center text-2xl">
+                <i class="fa-solid fa-link-slash"></i>
+            </div>
+            <h1 class="text-xl font-bold text-white mb-2">Link inválido ou expirado</h1>
+            <p class="text-sm text-slate-400 mb-6">
+                Este link já foi usado ou passou do prazo de validade. Solicite um novo na tela de login.
+            </p>
+            <a href="/login" class="inline-block w-full py-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl transition duration-200 shadow-lg shadow-blue-600/30">
+                Voltar ao login
+            </a>
+        </div>
+        {% endif %}
+    </div>
+
+    <script>
+        function showAlert(msg, isError = false) {
+            const box = document.getElementById('alert-box');
+            box.classList.remove('hidden', 'bg-red-500/20', 'text-red-300', 'bg-emerald-500/20', 'text-emerald-300', 'border', 'border-red-500/50', 'border-emerald-500/50');
+            if (isError) {
+                box.classList.add('bg-red-500/20', 'text-red-300', 'border', 'border-red-500/50');
+            } else {
+                box.classList.add('bg-emerald-500/20', 'text-emerald-300', 'border', 'border-emerald-500/50');
+            }
+            box.textContent = msg;
+        }
+
+        async function handleReset(e) {
+            e.preventDefault();
+            const password = document.getElementById('new-password').value;
+            const confirm = document.getElementById('confirm-password').value;
+            const token = new URLSearchParams(window.location.search).get('token') || '';
+            const btn = document.getElementById('reset-btn');
+
+            if (password.length < 6) {
+                showAlert('A senha precisa ter pelo menos 6 caracteres.', true);
+                return;
+            }
+            if (password !== confirm) {
+                showAlert('As senhas não coincidem! Verifique e tente novamente.', true);
+                return;
+            }
+
+            btn.disabled = true;
+            try {
+                const res = await fetch('/api/redefinir-senha', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ token, password, confirm })
+                });
+                let data = {};
+                try { data = await res.json(); } catch (_) {
+                    showAlert('O servidor respondeu com erro ' + res.status + ' (resposta que não é JSON). Veja o terminal do fincash.py.', true);
+                    btn.disabled = false;
+                    return;
+                }
+
+                if (res.ok) {
+                    document.getElementById('form-reset').classList.add('hidden');
+                    showAlert('Senha redefinida com sucesso! Redirecionando para o login...');
+                    setTimeout(() => { window.location.href = '/login'; }, 2000);
+                } else {
+                    showAlert(data.erro || 'Não foi possível redefinir a senha.', true);
+                    btn.disabled = false;
+                }
+            } catch (err) {
+                showAlert('Erro de conexão com o servidor', true);
+                btn.disabled = false;
+            }
+        }
+    </script>
+</body>
+</html>

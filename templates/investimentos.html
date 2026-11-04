@@ -101,6 +101,21 @@
         <main class="flex-1 overflow-y-auto p-4 md:p-6 bg-slate-100">
             <div class="max-w-7xl mx-auto space-y-6">
 
+                <!-- ABAS -->
+                <div class="flex gap-2 border-b border-slate-200" role="tablist">
+                    <button id="tab-mercado" role="tab" onclick="mostrarAba('mercado')"
+                        class="px-4 py-2.5 text-sm font-semibold border-b-2 -mb-px transition">
+                        <i class="fa-solid fa-chart-line mr-1.5"></i>Mercado
+                    </button>
+                    <button id="tab-perfil" role="tab" onclick="mostrarAba('perfil')"
+                        class="px-4 py-2.5 text-sm font-semibold border-b-2 -mb-px transition">
+                        <i class="fa-solid fa-user-check mr-1.5"></i>Meu perfil e alertas
+                    </button>
+                </div>
+
+                <!-- ABA 1: MERCADO (conteúdo principal) -->
+                <div id="aba-mercado" class="space-y-6">
+
                 <!-- INDICADORES ECONÔMICOS EM TEMPO REAL -->
                 <div id="indicadores-container" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
                     <div class="bg-white p-3.5 rounded-2xl border border-slate-200 text-center animate-pulse">Carregando
@@ -209,6 +224,76 @@
                 </div>
             </div>    
 
+                </div><!-- /aba-mercado -->
+
+                <!-- ABA 2: MEU PERFIL (quiz + alertas) -->
+                <div id="aba-perfil" class="hidden space-y-6">
+
+                    <!-- PERFIL ATUAL -->
+                    <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200/80">
+                        <h2 class="text-xs font-bold tracking-wider text-slate-500 uppercase mb-4">Seu perfil de investidor</h2>
+                        <div id="perfil-atual" class="text-sm text-slate-400">Carregando...</div>
+                        <div class="flex flex-wrap gap-2 mt-5">
+                            <button id="btn-quiz" onclick="iniciarQuiz()"
+                                class="px-4 py-2.5 bg-emerald-600 text-white rounded-xl text-sm font-bold hover:bg-emerald-500 transition">
+                                <i class="fa-solid fa-clipboard-question mr-1.5"></i><span id="txt-btn-quiz">Fazer o quiz</span>
+                            </button>
+                            <button onclick="alternarEscolhaManual()"
+                                class="px-4 py-2.5 bg-slate-100 text-slate-700 rounded-xl text-sm font-semibold hover:bg-slate-200 transition">
+                                <i class="fa-solid fa-pen mr-1.5"></i>Escolher outro perfil manualmente
+                            </button>
+                        </div>
+                        <div id="escolha-manual" class="hidden mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3"></div>
+                    </div>
+
+                    <!-- QUIZ -->
+                    <div id="card-quiz" class="hidden bg-white p-6 rounded-2xl shadow-sm border border-slate-200/80">
+                        <div class="flex items-center justify-between mb-3">
+                            <h2 class="text-xs font-bold tracking-wider text-slate-500 uppercase">
+                                <i class="fa-solid fa-clipboard-question text-emerald-500 mr-1"></i> Quiz do investidor
+                            </h2>
+                            <span id="quiz-contador" class="text-xs font-semibold text-slate-500"></span>
+                        </div>
+                        <div class="h-1.5 bg-slate-100 rounded-full overflow-hidden mb-5">
+                            <div id="quiz-barra" class="h-full bg-emerald-500 transition-all" style="width:0%"></div>
+                        </div>
+                        <p id="quiz-pergunta" class="font-semibold text-slate-800 mb-4"></p>
+                        <div id="quiz-opcoes" class="space-y-2"></div>
+                        <div class="flex justify-between mt-5">
+                            <button onclick="voltarPergunta()" id="quiz-voltar"
+                                class="text-xs font-semibold text-slate-500 hover:text-slate-800">← Voltar</button>
+                            <button onclick="cancelarQuiz()"
+                                class="text-xs font-semibold text-slate-400 hover:text-red-500">Cancelar</button>
+                        </div>
+                    </div>
+
+                    <!-- ALERTAS NO TELEGRAM -->
+                    <div class="bg-white p-6 rounded-2xl shadow-sm border border-slate-200/80">
+                        <div class="flex items-start justify-between gap-4">
+                            <div>
+                                <h2 class="text-xs font-bold tracking-wider text-slate-500 uppercase mb-2">
+                                    <i class="fa-brands fa-telegram text-sky-500 mr-1"></i> Alertas no Telegram
+                                </h2>
+                                <p class="text-sm text-slate-600 leading-relaxed">
+                                    Receba no Telegram as notícias de investimentos do <b>seu perfil</b> em tempo real, com um
+                                    aviso se o momento parece bom para <b>investir</b>, <b>manter</b> ou <b>reduzir risco / retirar
+                                    dinheiro</b>. No máximo um alerta a cada poucas horas e nunca de madrugada.
+                                </p>
+                            </div>
+                            <button id="toggle-alertas" role="switch" aria-checked="false" onclick="alternarAlertas()"
+                                class="relative shrink-0 w-12 h-7 rounded-full bg-slate-300 transition" aria-label="Receber alertas no Telegram">
+                                <span id="toggle-bolinha"
+                                    class="absolute top-0.5 left-0.5 w-6 h-6 bg-white rounded-full shadow transition-transform"></span>
+                            </button>
+                        </div>
+                        <p id="alertas-status" class="text-xs mt-3 text-slate-500"></p>
+                        <p class="text-[11px] text-slate-400 mt-3">
+                            ℹ️ Conteúdo informativo gerado a partir de notícias. Não é recomendação de investimento.
+                        </p>
+                    </div>
+
+                </div><!-- /aba-perfil -->
+
             </div>
         </main>
     </div>
@@ -255,7 +340,10 @@
                     method: 'PUT',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ perfil })
-                });
+                }).then(() => {
+                    estado.perfil = perfil; estado.origem = 'manual'; estado.pontos = null;
+                    renderPerfil();
+                }).catch(() => { });
             }
 
             carregarNoticias();
@@ -368,14 +456,179 @@
             }
         }
 
+        // ===== ABAS =====
+        function mostrarAba(nome) {
+            ['mercado', 'perfil'].forEach(a => {
+                document.getElementById('aba-' + a).classList.toggle('hidden', a !== nome);
+                const t = document.getElementById('tab-' + a);
+                t.classList.toggle('border-emerald-500', a === nome);
+                t.classList.toggle('text-emerald-700', a === nome);
+                t.classList.toggle('border-transparent', a !== nome);
+                t.classList.toggle('text-slate-500', a !== nome);
+                t.setAttribute('aria-selected', a === nome ? 'true' : 'false');
+            });
+            try { localStorage.setItem('invest_aba', nome); } catch (e) { }
+        }
+
+        // ===== PERFIL, QUIZ E ALERTAS =====
+        let estado = { perfil: null, origem: null, pontos: null, pontos_max: 28, quiz_em: null, alertas: false, telegram: false, perfis: [] };
+        let perguntas = [];
+        let respostas = [];
+
+        function renderPerfil() {
+            const p = estado.perfis.find(x => x.id === estado.perfil);
+            const el = document.getElementById('perfil-atual');
+            if (!p) {
+                el.innerHTML = `<p class="text-slate-600">Você ainda não tem um perfil definido. Faça o quiz (leva 1 minuto) ou escolha um manualmente.</p>`;
+            } else {
+                const origem = estado.origem === 'quiz'
+                    ? `Definido pelo quiz${estado.quiz_em ? ' em ' + esc(estado.quiz_em) : ''}${estado.pontos ? ` · ${estado.pontos} de ${estado.pontos_max} pontos` : ''}`
+                    : 'Escolhido por você';
+                el.innerHTML = `
+                    <div class="flex items-center gap-4">
+                        <span class="text-5xl">${esc(p.emoji)}</span>
+                        <div>
+                            <p class="text-2xl font-extrabold text-slate-800">${esc(p.nome)}</p>
+                            <p class="text-xs font-semibold text-emerald-700 mt-0.5">${origem}</p>
+                            <p class="text-sm text-slate-600 mt-1">${esc(p.descricao)}</p>
+                        </div>
+                    </div>`;
+            }
+            document.getElementById('txt-btn-quiz').textContent = estado.origem === 'quiz' ? 'Refazer o quiz' : 'Fazer o quiz';
+            document.getElementById('escolha-manual').innerHTML = estado.perfis.map(x => `
+                <button onclick="escolherManual('${esc(x.id)}')"
+                    class="p-3 rounded-xl border text-left transition hover:border-emerald-500 ${x.id === estado.perfil ? 'ring-2 ring-emerald-500 bg-emerald-50' : ''}">
+                    <span class="text-xl">${esc(x.emoji)}</span>
+                    <span class="font-bold text-slate-800 ml-1">${esc(x.nome)}</span>
+                    <p class="text-xs text-slate-500 mt-1">${esc(x.descricao)}</p>
+                </button>`).join('');
+            renderAlertas();
+        }
+
+        function renderAlertas() {
+            const t = document.getElementById('toggle-alertas');
+            const on = estado.alertas;
+            t.setAttribute('aria-checked', on ? 'true' : 'false');
+            t.classList.toggle('bg-emerald-500', on);
+            t.classList.toggle('bg-slate-300', !on);
+            document.getElementById('toggle-bolinha').style.transform = on ? 'translateX(20px)' : 'translateX(0)';
+            const st = document.getElementById('alertas-status');
+            if (!estado.telegram) st.textContent = 'Para receber, vincule sua conta ao bot do Telegram (comando /login no bot).';
+            else if (!estado.perfil) st.textContent = 'Defina seu perfil (quiz ou manual) para poder ligar os alertas.';
+            else st.textContent = on ? '🔔 Alertas ligados: você receberá avisos no Telegram.' : '🔕 Alertas desligados.';
+        }
+
+        function alternarEscolhaManual() {
+            document.getElementById('escolha-manual').classList.toggle('hidden');
+        }
+
+        async function escolherManual(id) {
+            await selecionarPerfil(id, true);
+            document.getElementById('escolha-manual').classList.add('hidden');
+        }
+
+        async function carregarEstado() {
+            try {
+                const r = await fetch('/api/investimentos/perfil');
+                if (r.status === 401) { window.location.href = '/login'; return null; }
+                const d = await r.json();
+                Object.assign(estado, d);
+            } catch (e) { }
+            renderPerfil();
+            return estado;
+        }
+
+        async function iniciarQuiz() {
+            document.getElementById('escolha-manual').classList.add('hidden');
+            try {
+                if (!perguntas.length) {
+                    const r = await fetch('/api/investimentos/quiz');
+                    perguntas = (await r.json()).perguntas || [];
+                }
+            } catch (e) { }
+            if (!perguntas.length) { alert('Não consegui carregar o quiz agora. Tente de novo.'); return; }
+            respostas = [];
+            document.getElementById('card-quiz').classList.remove('hidden');
+            renderPergunta();
+            document.getElementById('card-quiz').scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+
+        function renderPergunta() {
+            const i = respostas.length;
+            document.getElementById('quiz-contador').textContent = `${i + 1} de ${perguntas.length}`;
+            document.getElementById('quiz-barra').style.width = `${(i / perguntas.length) * 100}%`;
+            document.getElementById('quiz-pergunta').textContent = perguntas[i].pergunta;
+            document.getElementById('quiz-voltar').classList.toggle('invisible', i === 0);
+            document.getElementById('quiz-opcoes').innerHTML = perguntas[i].opcoes.map((o, j) => `
+                <button onclick="responderQuiz(${j})"
+                    class="w-full text-left px-4 py-3 rounded-xl border border-slate-200 text-sm text-slate-700 hover:border-emerald-500 hover:bg-emerald-50 transition">
+                    <b class="text-emerald-600 mr-2">${'ABCD'[j]}</b>${esc(o)}
+                </button>`).join('');
+        }
+
+        function responderQuiz(j) {
+            respostas.push(j);
+            if (respostas.length < perguntas.length) renderPergunta();
+            else enviarQuiz();
+        }
+
+        function voltarPergunta() {
+            if (respostas.length > 0) { respostas.pop(); renderPergunta(); }
+        }
+
+        function cancelarQuiz() {
+            document.getElementById('card-quiz').classList.add('hidden');
+            respostas = [];
+        }
+
+        async function enviarQuiz() {
+            const box = document.getElementById('quiz-opcoes');
+            box.innerHTML = '<p class="text-sm text-slate-400">Calculando seu perfil...</p>';
+            try {
+                const r = await fetch('/api/investimentos/quiz', {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ respostas })
+                });
+                const d = await r.json();
+                if (!r.ok) throw new Error(d.erro || 'Erro');
+                estado.perfil = d.perfil; estado.origem = 'quiz'; estado.pontos = d.pontos; estado.pontos_max = d.pontos_max;
+                estado.quiz_em = new Date().toLocaleDateString('pt-BR');
+                renderPerfil();
+                document.getElementById('card-quiz').classList.add('hidden');
+                selecionarPerfil(d.perfil, false);   // atualiza notícias e análise da aba Mercado
+                document.getElementById('perfil-atual').scrollIntoView({ behavior: 'smooth', block: 'center' });
+            } catch (e) {
+                box.innerHTML = `<p class="text-sm text-red-500">${esc(e.message)}</p>
+                    <button onclick="cancelarQuiz()" class="mt-2 text-xs underline text-slate-500">Fechar</button>`;
+            }
+        }
+
+        async function alternarAlertas() {
+            const novo = !estado.alertas;
+            const st = document.getElementById('alertas-status');
+            try {
+                const r = await fetch('/api/investimentos/alertas', {
+                    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ativo: novo })
+                });
+                const d = await r.json();
+                if (!r.ok) { st.textContent = '⚠️ ' + (d.erro || 'Não consegui alterar agora.'); return; }
+                estado.alertas = d.alertas;
+                renderAlertas();
+                if (novo) st.textContent = '🔔 Alertas ligados: o primeiro aviso chega no Telegram em breve (nunca de madrugada).';
+            } catch (e) {
+                st.textContent = '⚠️ Não consegui alterar agora. Tente de novo.';
+            }
+        }
+
         // Inicialização
         carregarIndicadores();
         carregarMovimentosInvestimento();
         // Usa o perfil já salvo (antes, abrir a página sobrescrevia o perfil com "moderado")
-        fetch('/api/investimentos/perfil')
-            .then(r => r.ok ? r.json() : {})
-            .catch(() => ({}))
-            .then(d => selecionarPerfil(d.perfil || 'moderado', false));
+        carregarEstado().then(d => selecionarPerfil((d && d.perfil) || 'moderado', false));
+        let abaInicial = 'mercado';
+        try { abaInicial = localStorage.getItem('invest_aba') === 'perfil' ? 'perfil' : 'mercado'; } catch (e) { }
+        mostrarAba(abaInicial);
     </script>
 </body>
 

@@ -52,8 +52,36 @@
                 </div>
             </div>
 
+            <div class="text-right -mt-1">
+                <button type="button" onclick="showForgot()" class="text-sm text-blue-400 hover:text-blue-300 transition">
+                    Esqueci minha senha
+                </button>
+            </div>
+
             <button type="submit" class="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl transition duration-200 shadow-lg shadow-blue-600/30">
                 Entrar no Dashboard
+            </button>
+        </form>
+
+        <!-- FORMULÁRIO DE RECUPERAÇÃO DE SENHA -->
+        <form id="form-forgot" onsubmit="handleForgot(event)" class="space-y-4 hidden">
+            <p class="text-sm text-slate-400">
+                Informe seu e-mail ou telefone. Enviaremos um link para o e-mail cadastrado, onde você poderá criar uma nova senha.
+            </p>
+            <div>
+                <label class="block text-xs font-semibold uppercase text-slate-400 mb-1">Telefone ou E-mail</label>
+                <div class="relative">
+                    <i class="fa-solid fa-envelope absolute left-3.5 top-3.5 text-slate-500"></i>
+                    <input type="text" id="forgot-identifier" required placeholder="(11) 99999-9999 ou seu@email.com" class="w-full pl-10 pr-4 py-2.5 bg-slate-900 border border-slate-700 rounded-xl focus:outline-none focus:border-blue-500 text-white placeholder-slate-500">
+                </div>
+            </div>
+
+            <button type="submit" id="forgot-btn" class="w-full py-3 bg-blue-600 hover:bg-blue-500 disabled:opacity-60 text-white font-bold rounded-xl transition duration-200 shadow-lg shadow-blue-600/30">
+                Enviar link de recuperação
+            </button>
+
+            <button type="button" onclick="switchTab('login')" class="w-full text-sm text-slate-400 hover:text-slate-200 transition">
+                <i class="fa-solid fa-arrow-left mr-1"></i> Voltar ao login
             </button>
         </form>
 
@@ -119,6 +147,7 @@
             const alertBox = document.getElementById('alert-box');
 
             alertBox.classList.add('hidden');
+            document.getElementById('form-forgot').classList.add('hidden');
 
             if (tab === 'login') {
                 loginForm.classList.remove('hidden');
@@ -130,6 +159,50 @@
                 regForm.classList.remove('hidden');
                 tabReg.className = "w-1/2 py-3 text-center font-semibold text-emerald-500 border-b-2 border-emerald-500 transition";
                 tabLogin.className = "w-1/2 py-3 text-center font-semibold text-slate-400 border-b-2 border-transparent hover:text-slate-200 transition";
+            }
+        }
+
+        function showForgot() {
+            switchTab('login');                                   // reseta abas e alerta
+            document.getElementById('form-login').classList.add('hidden');
+            document.getElementById('form-forgot').classList.remove('hidden');
+            const tabLogin = document.getElementById('tab-login');
+            tabLogin.className = "w-1/2 py-3 text-center font-semibold text-slate-400 border-b-2 border-transparent hover:text-slate-200 transition";
+            // aproveita o que a pessoa já digitou no login
+            document.getElementById('forgot-identifier').value = document.getElementById('login-identifier').value;
+            document.getElementById('forgot-identifier').focus();
+        }
+
+        async function handleForgot(e) {
+            e.preventDefault();
+            const identifier = document.getElementById('forgot-identifier').value.trim();
+            const btn = document.getElementById('forgot-btn');
+
+            if (!identifier) {
+                showAlert('Informe seu e-mail ou telefone.', true);
+                return;
+            }
+
+            btn.disabled = true;
+            btn.textContent = 'Enviando...';
+            try {
+                const res = await fetch('/api/esqueci-senha', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ identifier })
+                });
+                let data = {};
+                try { data = await res.json(); } catch (_) {
+                    showAlert('O servidor respondeu com erro ' + res.status + ' (resposta que não é JSON). Reinicie o fincash.py e veja o terminal.', true);
+                    return;
+                }
+                showAlert(data.mensagem || data.erro || 'Pedido enviado.', !res.ok);
+            } catch (err) {
+                console.error(err);
+                showAlert('Erro de conexão com o servidor: ' + err.message, true);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Enviar link de recuperação';
             }
         }
 

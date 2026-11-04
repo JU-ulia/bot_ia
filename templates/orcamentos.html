@@ -97,7 +97,7 @@
                 <div id="conteudo" class="space-y-6">
 
                     <!-- Meta de poupança -->
-                    <section class="bg-white rounded-2xl p-5 shadow-sm border border-slate-200/80">
+                    <section id="poupanca" class="bg-white rounded-2xl p-5 shadow-sm border border-slate-200/80 transition-shadow duration-500">
                         <div class="flex flex-col md:flex-row md:items-start md:justify-between gap-4">
                             <div class="flex items-center gap-4">
                                 <div class="w-12 h-12 rounded-xl bg-emerald-100 text-emerald-600 flex items-center justify-center text-xl"><i class="fa-solid fa-piggy-bank"></i></div>
@@ -346,7 +346,17 @@
             } finally { btn.disabled = false; }
         }
 
-        carregar();
+        // Vindo do "Ver detalhes" da Poupança (/orcamentos#poupanca): rola até a seção e destaca
+        function destacarPoupanca() {
+            if (location.hash !== '#poupanca') return;
+            const el = document.getElementById('poupanca');
+            if (!el) return;
+            el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            el.classList.add('ring-2', 'ring-emerald-400');
+            setTimeout(() => el.classList.remove('ring-2', 'ring-emerald-400'), 2500);
+        }
+
+        carregar().then(destacarPoupanca, destacarPoupanca);
     </script>
 </body>
 </html>

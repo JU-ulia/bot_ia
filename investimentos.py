@@ -6,6 +6,8 @@ Fincash · Investimentos
   • análise da IA (Groq) a partir das manchetes: resumo, riscos, oportunidades, empresas em crescimento, dicas
   • rotas web  (/investimentos e /api/investimentos/...)
   • menu e conversa no Telegram ("dicas de investimentos", /investir)
+  • quiz de perfil de investidor (Telegram e site) — o resultado é aplicado automaticamente, mas dá para trocar à mão
+  • alertas opcionais no Telegram: notícias em tempo real + sinal "considerar investir / manter / reduzir" conforme o perfil
 
 Só usa a biblioteca padrão + o que o fincash.py já usa (flask, python-telegram-bot, groq).
 Conteúdo informativo: nada aqui é recomendação de investimento.
@@ -21,7 +23,7 @@ import time
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from email.utils import parsedate_to_datetime
 
 from flask import jsonify, redirect, render_template, request, session, url_for
@@ -64,6 +66,9 @@ MAX_PERGUNTA = 500
 LIMITE_IA_POR_HORA = 30
 TEMPO_MODO_CHAT = 900     # conversa com a IA no Telegram expira após 15 min parado
 TEMPO_MENU = 600          # menu aceita resposta digitada por 10 min
+INTERVALO_ALERTAS = 1800  # o robô de alertas confere o mercado a cada 30 min
+PAUSA_ENTRE_ALERTAS = 3 * 3600   # no mínimo 3 h entre dois alertas para a mesma pessoa
+HORA_SILENCIO = (22, 7)   # sem alertas das 22h às 7h (horário de Brasília)
 
 AVISO_TXT = "Conteúdo informativo gerado por IA a partir de notícias. Não é recomendação de investimento."
 
@@ -80,11 +85,24 @@ def configurar(obter_conexao, cliente_groq, modelo, usuario_esta_vinculado):
 
 
 def preparar_banco():
-    """Guarda o perfil de investidor na tabela users (usado pelo site e pelo Telegram)."""
+    """Guarda perfil, resultado do quiz e opção de alertas na tabela users (usado pelo site e pelo Telegram)."""
     conexao = _deps["obter_conexao"]()
     try:
         with conexao.cursor() as cursor:
             cursor.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS perfil_investidor VARCHAR(20);")
+            # como o perfil foi definido ('quiz' ou 'manual'), pontuação do quiz e opção de alertas no Telegram
+            cursor.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS perfil_origem VARCHAR(10);")
+            cursor.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS quiz_pontos INTEGER;")
+            cursor.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS quiz_em TIMESTAMP;")
+            cursor.execute("ALTER TABLE users ADD COLUMN IF NOT EXISTS alertas_invest BOOLEAN NOT NULL DEFAULT FALSE;")
+            # último alerta enviado (evita repetir a mesma notícia/conselho)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS invest_alertas_estado (
+                    telegram_id TEXT PRIMARY KEY,
+                    assinatura TEXT NOT NULL,
+                    enviado_em TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
             # Movimentos de investimento (aporte = 'entrada', resgate = 'saida')
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS investments (
@@ -388,6 +406,54 @@ def _liberar_ia(chave) -> bool:
 
 
 # ==========================================
+# QUIZ DO PERFIL DE INVESTIDOR
+# ==========================================
+# Cada alternativa vale de 1 (mais cauteloso) a 4 (mais arrojado). A soma define o perfil.
+# O perfil "cripto" não sai do quiz (é uma escolha de apetite por ativos digitais): só manualmente.
+QUIZ = [
+    {"pergunta": "Qual é o seu principal objetivo ao investir?",
+     "opcoes": [("Proteger meu dinheiro, sem sustos", 1),
+                ("Ter uma renda extra com segurança", 2),
+                ("Fazer o patrimônio crescer no longo prazo", 3),
+                ("Multiplicar o dinheiro, mesmo com risco alto", 4)]},
+    {"pergunta": "Por quanto tempo você pretende deixar o dinheiro investido?",
+     "opcoes": [("Menos de 1 ano", 1), ("De 1 a 3 anos", 2), ("De 3 a 5 anos", 3), ("Mais de 5 anos", 4)]},
+    {"pergunta": "Seus investimentos caíram 20% em poucas semanas. O que você faz?",
+     "opcoes": [("Vendo tudo para não perder mais", 1), ("Vendo uma parte", 2),
+                ("Mantenho e espero recuperar", 3), ("Aproveito para comprar mais", 4)]},
+    {"pergunta": "Qual é a sua experiência com investimentos?",
+     "opcoes": [("Nenhuma, só poupança", 1), ("Já usei CDB, Tesouro ou LCI/LCA", 2),
+                ("Invisto em fundos, FIIs ou ações", 3), ("Opero com frequência e conheço bem o mercado", 4)]},
+    {"pergunta": "Que parte do que você investe aceitaria colocar em renda variável (ações, FIIs, cripto)?",
+     "opcoes": [("Nada", 1), ("Até 20%", 2), ("Até 50%", 3), ("Mais de 50%", 4)]},
+    {"pergunta": "Como está a sua reserva de emergência?",
+     "opcoes": [("Ainda não tenho", 1), ("Cobre cerca de 3 meses", 2),
+                ("Cobre cerca de 6 meses", 3), ("Mais de 6 meses e minha renda é estável", 4)]},
+    {"pergunta": "Qual perda você aceitaria ter em 1 ano em troca de chance de ganhar mais?",
+     "opcoes": [("Nenhuma", 1), ("Até 5%", 2), ("Até 15%", 3), ("Mais de 15%", 4)]},
+]
+QUIZ_FAIXAS = [(15, "conservador"), (23, "moderado"), (99, "arrojado")]   # soma 7..28
+
+
+def quiz_para_cliente():
+    """Perguntas sem a pontuação (a conta é feita só no servidor)."""
+    return [{"pergunta": q["pergunta"], "opcoes": [o[0] for o in q["opcoes"]]} for q in QUIZ]
+
+
+def calcular_quiz(respostas):
+    """respostas = lista de índices (0..3), uma por pergunta. Retorna (perfil, pontos)."""
+    if not isinstance(respostas, list) or len(respostas) != len(QUIZ):
+        raise ValueError("Responda todas as perguntas.")
+    pontos = 0
+    for q, r in zip(QUIZ, respostas):
+        if isinstance(r, bool) or not isinstance(r, int) or not 0 <= r < len(q["opcoes"]):
+            raise ValueError("Resposta inválida.")
+        pontos += q["opcoes"][r][1]
+    perfil = next(nome for limite, nome in QUIZ_FAIXAS if pontos < limite)
+    return perfil, pontos
+
+
+# ==========================================
 # PERFIL DO INVESTIDOR (banco)
 # ==========================================
 def _perfil_valido(p):
@@ -406,14 +472,111 @@ def _ler_perfil(coluna, valor):
         conexao.close()
 
 
-def _gravar_perfil(coluna, valor, perfil):
+def _gravar_perfil(coluna, valor, perfil, origem="manual", pontos=None):
+    """Escolha manual (origem='manual') ou resultado do quiz (origem='quiz', com pontos)."""
     conexao = _deps["obter_conexao"]()
     try:
         with conexao.cursor() as cursor:
-            cursor.execute(f"UPDATE users SET perfil_investidor = %s WHERE {coluna} = %s;", (perfil, valor))
+            if origem == "quiz":
+                cursor.execute(
+                    f"UPDATE users SET perfil_investidor = %s, perfil_origem = 'quiz', quiz_pontos = %s, "
+                    f"quiz_em = CURRENT_TIMESTAMP WHERE {coluna} = %s;", (perfil, pontos, valor))
+            else:
+                cursor.execute(
+                    f"UPDATE users SET perfil_investidor = %s, perfil_origem = 'manual' WHERE {coluna} = %s;",
+                    (perfil, valor))
         conexao.commit()
     finally:
         conexao.close()
+
+
+def _ler_estado(coluna, valor):
+    """Perfil + como foi definido + último quiz + alertas ligados?"""
+    conexao = _deps["obter_conexao"]()
+    try:
+        with conexao.cursor() as cursor:
+            cursor.execute(f"SELECT perfil_investidor, perfil_origem, quiz_pontos, quiz_em, alertas_invest, telegram_id "
+                           f"FROM users WHERE {coluna} = %s;", (valor,))
+            row = cursor.fetchone()
+    finally:
+        conexao.close()
+    if not row:
+        return {"perfil": None, "origem": None, "pontos": None, "quiz_em": None, "alertas": False, "telegram": False}
+    return {"perfil": _perfil_valido(row[0]) if row[0] else None,
+            "origem": row[1] if row[1] in ("quiz", "manual") else None,
+            "pontos": row[2], "quiz_em": row[3].strftime("%d/%m/%Y") if row[3] else None,
+            "alertas": bool(row[4]), "telegram": bool(row[5])}
+
+
+def _gravar_alertas(coluna, valor, ligado):
+    conexao = _deps["obter_conexao"]()
+    try:
+        with conexao.cursor() as cursor:
+            cursor.execute(f"UPDATE users SET alertas_invest = %s WHERE {coluna} = %s;", (bool(ligado), valor))
+            if not ligado:   # ao desligar, apaga o histórico: ao religar, o 1º alerta vem na hora
+                cursor.execute("DELETE FROM invest_alertas_estado WHERE telegram_id = "
+                               f"(SELECT telegram_id FROM users WHERE {coluna} = %s);", (valor,))
+        conexao.commit()
+    finally:
+        conexao.close()
+
+
+# ==========================================
+# ALERTAS: CONSELHO CONFORME O PERFIL
+# ==========================================
+TOLERANCIA = {"conservador": 0, "moderado": 1, "arrojado": 2, "cripto": 2}   # risco máximo confortável (0 baixo, 1 moderado, 2 alto)
+NIVEL_NUM = {"baixo": 0, "moderado": 1, "alto": 2}
+
+CONSELHOS = {
+    "investir": {"emoji": "🟢", "titulo": "Bom momento para considerar aportar",
+                 "texto": "O clima das notícias está favorável e o risco combina com o seu perfil. "
+                          "Se você já tem reserva de emergência, pode ser uma boa hora para aportar aos poucos."},
+    "manter": {"emoji": "🟡", "titulo": "Manter a calma e acompanhar",
+               "texto": "Não há sinal forte agora. Em geral, o melhor é manter sua estratégia, "
+                        "sem aportes ou resgates por impulso."},
+    "retirar": {"emoji": "🔴", "titulo": "Hora de rever e proteger o dinheiro",
+                "texto": "O momento está arriscado para o seu perfil. Considere reduzir a exposição ao que for mais "
+                         "arriscado e levar parte do dinheiro para algo mais seguro e líquido — sem pânico e só do que você "
+                         "não precisa deixar investido."},
+}
+
+
+def conselho_para_perfil(perfil, analise):
+    """Regra simples e transparente (clima das notícias x risco x tolerância do perfil). Retorna 'investir', 'manter' ou 'retirar'."""
+    risco = NIVEL_NUM.get(analise.get("nivel_risco"), 1)
+    tol = TOLERANCIA.get(perfil, 1)
+    clima = analise.get("clima")
+    if clima == "negativo" and risco >= 1:
+        return "retirar"
+    if risco == 2 and tol < 2:
+        return "retirar"
+    if clima == "positivo" and risco <= tol:
+        return "investir"
+    return "manter"
+
+
+def montar_alerta(perfil):
+    """Texto HTML do alerta + assinatura (muda quando o conselho ou as manchetes principais mudam). Ou None sem notícias."""
+    noticias = buscar_noticias(perfil)
+    if not noticias:
+        return None
+    a = analisar_perfil(perfil)
+    acao = conselho_para_perfil(perfil, a)
+    c = CONSELHOS[acao]
+    p = PERFIS[perfil]
+    assinatura = acao + ":" + hashlib.sha1("|".join(x["titulo"] for x in noticias[:4]).encode("utf-8")).hexdigest()[:16]
+    linhas = [f"🔔 <b>Alerta de investimentos · {p['emoji']} {p['nome']}</b>", "",
+              f"{c['emoji']} <b>{c['titulo']}</b>", c["texto"], ""]
+    if a.get("justificativa_risco"):
+        linhas.append(f"Risco agora: {NIVEL_EMOJI[a['nivel_risco']]} <b>{a['nivel_risco'].capitalize()}</b> — {_h(a['justificativa_risco'])}")
+    elif a.get("resumo"):
+        linhas.append(_h(a["resumo"]))
+    linhas += ["", "📰 <b>Em destaque agora</b>"]
+    for x in noticias[:3]:
+        linhas.append(f"• <a href=\"{html.escape(x['link'], quote=True)}\">{_h(x['titulo'])}</a>\n"
+                      f"   <i>{_h(x['fonte'])} · {x['quando']}</i>")
+    linhas += ["", AVISO_HTML, "<i>Para parar de receber, abra /investir → 🔔 Alertas.</i>"]
+    return "\n".join(linhas), assinatura
 
 
 def perfil_por_telegram(tid):
@@ -455,8 +618,11 @@ def registrar_web(app):
         uid = uid_atual()
         if not uid:
             return jsonify({"erro": "Não autenticado"}), 401
+        estado = _ler_estado("id", uid)
         return jsonify({
-            "perfil": _ler_perfil("id", uid),
+            "perfil": estado["perfil"], "origem": estado["origem"],
+            "pontos": estado["pontos"], "pontos_max": 4 * len(QUIZ), "quiz_em": estado["quiz_em"],
+            "alertas": estado["alertas"], "telegram": estado["telegram"],
             "perfis": [{"id": k, **{c: PERFIS[k][c] for c in ("nome", "emoji", "descricao")}} for k in PERFIS_ORDEM],
         })
 
@@ -468,8 +634,43 @@ def registrar_web(app):
         perfil = _perfil_valido((request.get_json(silent=True) or {}).get('perfil'))
         if not perfil:
             return jsonify({"erro": "Perfil inválido"}), 400
-        _gravar_perfil("id", uid, perfil)
-        return jsonify({"sucesso": True, "perfil": perfil})
+        _gravar_perfil("id", uid, perfil, origem="manual")
+        return jsonify({"sucesso": True, "perfil": perfil, "origem": "manual"})
+
+    @app.route('/api/investimentos/quiz', methods=['GET'])
+    def api_invest_quiz_get():
+        if not uid_atual():
+            return jsonify({"erro": "Não autenticado"}), 401
+        return jsonify({"perguntas": quiz_para_cliente()})
+
+    @app.route('/api/investimentos/quiz', methods=['POST'])
+    def api_invest_quiz_post():
+        uid = uid_atual()
+        if not uid:
+            return jsonify({"erro": "Não autenticado"}), 401
+        try:
+            perfil, pontos = calcular_quiz((request.get_json(silent=True) or {}).get('respostas'))
+        except ValueError as e:
+            return jsonify({"erro": str(e)}), 400
+        _gravar_perfil("id", uid, perfil, origem="quiz", pontos=pontos)
+        return jsonify({"sucesso": True, "perfil": perfil, "origem": "quiz",
+                        "pontos": pontos, "pontos_max": 4 * len(QUIZ)})
+
+    @app.route('/api/investimentos/alertas', methods=['PUT'])
+    def api_invest_alertas_put():
+        uid = uid_atual()
+        if not uid:
+            return jsonify({"erro": "Não autenticado"}), 401
+        ligado = (request.get_json(silent=True) or {}).get('ativo')
+        if not isinstance(ligado, bool):
+            return jsonify({"erro": "Valor inválido"}), 400
+        estado = _ler_estado("id", uid)
+        if ligado and not estado["perfil"]:
+            return jsonify({"erro": "Faça o quiz ou escolha um perfil antes de ligar os alertas."}), 400
+        if ligado and not estado["telegram"]:
+            return jsonify({"erro": "Vincule sua conta ao bot do Telegram para receber os alertas."}), 400
+        _gravar_alertas("id", uid, ligado)
+        return jsonify({"sucesso": True, "alertas": ligado})
 
     @app.route('/api/investimentos/noticias', methods=['GET'])
     def api_invest_noticias():
@@ -571,6 +772,8 @@ TEXTO_PARA_ACAO = {
     "5": "dicas", "dica": "dicas", "dicas": "dicas",
     "6": "indicadores", "indicadores": "indicadores",
     "7": "perguntar", "perguntar": "perguntar", "conversar": "perguntar", "conversar com a ia": "perguntar",
+    "8": "quiz", "quiz": "quiz", "fazer o quiz": "quiz", "descobrir meu perfil": "quiz",
+    "9": "alertas", "alerta": "alertas", "alertas": "alertas",
     "menu": "menu",
     **{k: f"setperfil:{k}" for k in PERFIS_ORDEM},
 }
@@ -583,9 +786,9 @@ def _eh_pedido_de_menu(norm: str) -> bool:
     return bool(re.search(r'\binvest(?:ir|imentos?)\b', norm))
 
 
-def _teclado_menu(perfil):
+def _teclado_menu(perfil, alertas=False):
     p = PERFIS.get(perfil)
-    rotulo_perfil = f"1️⃣ Meu perfil ({p['emoji']} {p['nome']})" if p else "1️⃣ Escolher meu perfil"
+    rotulo_perfil = f"1️⃣ Trocar meu perfil ({p['emoji']} {p['nome']})" if p else "1️⃣ Escolher meu perfil"
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(rotulo_perfil, callback_data="inv:perfil")],
         [InlineKeyboardButton("2️⃣ Notícias", callback_data="inv:noticias"),
@@ -594,6 +797,9 @@ def _teclado_menu(perfil):
         [InlineKeyboardButton("5️⃣ Dicas para mim", callback_data="inv:dicas"),
          InlineKeyboardButton("6️⃣ Indicadores", callback_data="inv:indicadores")],
         [InlineKeyboardButton("7️⃣ Conversar com a IA", callback_data="inv:perguntar")],
+        [InlineKeyboardButton("8️⃣ 🧪 Quiz: descobrir meu perfil", callback_data="inv:quiz")],
+        [InlineKeyboardButton("9️⃣ " + ("🔔 Alertas: ligados" if alertas else "🔕 Alertas: desligados"),
+                              callback_data="inv:alertas")],
     ])
 
 
@@ -601,15 +807,11 @@ def _teclado_voltar():
     return InlineKeyboardMarkup([[InlineKeyboardButton("📋 Voltar ao menu", callback_data="inv:menu")]])
 
 
-def _teclado_perfis():
-    return InlineKeyboardMarkup(
-        [[InlineKeyboardButton(f"{PERFIS[k]['emoji']} {PERFIS[k]['nome']}", callback_data=f"inv:setperfil:{k}")]
-         for k in PERFIS_ORDEM])
-
-
-def _texto_menu(perfil):
+def _texto_menu(perfil, origem=None):
     p = PERFIS.get(perfil)
-    linha_perfil = f"Seu perfil: {p['emoji']} <b>{p['nome']}</b>" if p else "Você ainda não escolheu seu perfil de investidor."
+    como = {"quiz": " (definido pelo quiz)", "manual": " (escolhido por você)"}.get(origem, "")
+    linha_perfil = (f"Seu perfil: {p['emoji']} <b>{p['nome']}</b>{como}" if p
+                    else "Você ainda não tem perfil de investidor. Faça o quiz (8) ou escolha um (1).")
     return (f"📊 <b>Investimentos</b>\n{linha_perfil}\n\n"
             "O que você quer ver? Toque em uma opção ou digite o número (ou o nome).")
 
@@ -619,20 +821,99 @@ def _texto_perfis():
     for k in PERFIS_ORDEM:
         p = PERFIS[k]
         linhas.append(f"{p['emoji']} <b>{p['nome']}</b> — {_h(p['descricao'])}")
-    linhas += ["", "Toque em um botão ou digite o nome do perfil."]
+    linhas += ["", "Toque em um botão ou digite o nome do perfil.",
+               "Em dúvida? Faça o quiz e eu descubro o seu perfil."]
     return "\n".join(linhas)
+
+
+def _teclado_perfis():
+    linhas = [[InlineKeyboardButton(f"{PERFIS[k]['emoji']} {PERFIS[k]['nome']}", callback_data=f"inv:setperfil:{k}")]
+              for k in PERFIS_ORDEM]
+    linhas.append([InlineKeyboardButton("🧪 Fazer o quiz", callback_data="inv:quiz")])
+    return InlineKeyboardMarkup(linhas)
+
+
+def _texto_pergunta(i):
+    q = QUIZ[i]
+    linhas = [f"🧪 <b>Quiz do investidor · {i + 1}/{len(QUIZ)}</b>", "", f"<b>{_h(q['pergunta'])}</b>", ""]
+    linhas += [f"{'ABCD'[j]}) {_h(o[0])}" for j, o in enumerate(q["opcoes"])]
+    return "\n".join(linhas)
+
+
+def _teclado_pergunta(i, acumulado):
+    """Sem estado no servidor: as respostas já dadas vão dentro do callback (ex.: inv:q:210 = 3 respostas dadas)."""
+    n = len(QUIZ[i]["opcoes"])
+    botoes = [InlineKeyboardButton("ABCD"[j], callback_data=f"inv:q:{acumulado}{j}") for j in range(n)]
+    return InlineKeyboardMarkup([botoes, [InlineKeyboardButton("✖️ Cancelar", callback_data="inv:menu")]])
+
+
+async def _passo_quiz(responder, tid, i, acumulado):
+    """Mostra a pergunta i; após a última, calcula, salva o perfil e mostra o resultado."""
+    if i < len(QUIZ):
+        await responder(_texto_pergunta(i), _teclado_pergunta(i, acumulado))
+        return
+    try:
+        perfil, pontos = calcular_quiz([int(c) for c in acumulado])
+    except (ValueError, TypeError):
+        await responder("Não consegui ler suas respostas. Vamos recomeçar?", _teclado_voltar())
+        return
+    _gravar_perfil("telegram_id", str(tid), perfil, origem="quiz", pontos=pontos)
+    p = PERFIS[perfil]
+    teclado = InlineKeyboardMarkup([
+        [InlineKeyboardButton("📋 Ir para o menu", callback_data="inv:menu")],
+        [InlineKeyboardButton("✏️ Prefiro escolher outro perfil", callback_data="inv:perfil")],
+        [InlineKeyboardButton("🔔 Receber alertas do meu perfil", callback_data="inv:alertas")],
+    ])
+    await responder(f"🎉 <b>Seu perfil: {p['emoji']} {p['nome']}</b>\n"
+                    f"Pontuação: {pontos} de {4 * len(QUIZ)}\n\n{_h(p['descricao'])}\n\n"
+                    "✅ Já apliquei esse perfil nas suas notícias e dicas. "
+                    "Se preferir outro (ou o perfil Cripto), é só trocar manualmente.\n\n"
+                    f"ℹ️ <i>Resultado indicativo, não é recomendação de investimento.</i>", teclado)
 
 
 async def _executar_acao(responder, context, tid, acao):
     """Faz o que o usuário pediu. 'responder(texto, teclado)' envia a mensagem (botão ou digitado)."""
     context.user_data['inv_menu'] = time.time()
-    perfil = perfil_por_telegram(tid)
+    estado = _ler_estado("telegram_id", str(tid))
+    perfil, origem, alertas = estado["perfil"], estado["origem"], estado["alertas"]
 
     if acao == "menu":
-        await responder(_texto_menu(perfil), _teclado_menu(perfil))
+        await responder(_texto_menu(perfil, origem), _teclado_menu(perfil, alertas))
         return
     if acao == "perfil":
         await responder(_texto_perfis(), _teclado_perfis())
+        return
+    if acao == "quiz":
+        await responder("🧪 <b>Vamos descobrir seu perfil de investidor</b>\n"
+                        f"São {len(QUIZ)} perguntas rápidas, sem resposta certa ou errada. "
+                        "O resultado vira seu perfil automaticamente (você pode trocar depois).")
+        await _passo_quiz(responder, tid, 0, "")
+        return
+    if acao.startswith("q:"):
+        acumulado = acao[2:]
+        valido = (acumulado.isdigit() and 1 <= len(acumulado) <= len(QUIZ)
+                  and all(int(c) < len(QUIZ[k]["opcoes"]) for k, c in enumerate(acumulado)))
+        if not valido:
+            await responder("Não entendi essa resposta. Vamos recomeçar o quiz?", _teclado_voltar())
+            return
+        await _passo_quiz(responder, tid, len(acumulado), acumulado)
+        return
+    if acao == "alertas":
+        if perfil is None:
+            await responder("Para ligar os alertas preciso saber seu perfil. Faça o quiz ou escolha um 👇", _teclado_perfis())
+            return
+        novo = not alertas
+        await asyncio.to_thread(_gravar_alertas, "telegram_id", str(tid), novo)
+        if novo:
+            p = PERFIS[perfil]
+            await responder(
+                f"🔔 <b>Alertas ligados</b> ({p['emoji']} {p['nome']})\n\n"
+                "Vou monitorar as notícias do seu perfil e avisar aqui quando houver algo relevante, dizendo se o momento "
+                "parece bom para <b>aportar</b>, para <b>manter</b> ou para <b>reduzir risco / retirar</b> dinheiro. "
+                "No máximo um aviso a cada poucas horas e nunca de madrugada.\n\n" + AVISO_HTML, _teclado_voltar())
+            asyncio.create_task(_enviar_primeiro_alerta(context.bot, str(tid)))
+        else:
+            await responder("🔕 <b>Alertas desligados.</b> Você pode ligar de novo quando quiser.", _teclado_voltar())
         return
     if acao.startswith("setperfil:"):
         novo = _perfil_valido(acao.split(":", 1)[1])
@@ -642,10 +923,11 @@ async def _executar_acao(responder, context, tid, acao):
         _gravar_perfil("telegram_id", str(tid), novo)
         p = PERFIS[novo]
         await responder(f"✅ Perfil definido: {p['emoji']} <b>{p['nome']}</b>")
-        await responder(_texto_menu(novo), _teclado_menu(novo))
+        await responder(_texto_menu(novo, "manual"), _teclado_menu(novo, alertas))
         return
     if perfil is None:
-        await responder("Antes, me diga seu perfil de investidor para eu personalizar as respostas 👇", _teclado_perfis())
+        await responder("Antes, me diga seu perfil de investidor para eu personalizar as respostas "
+                        "(escolha um ou faça o quiz) 👇", _teclado_perfis())
         return
 
     p = PERFIS[perfil]
@@ -714,7 +996,7 @@ async def _executar_acao(responder, context, tid, acao):
                 "<i>\"quais riscos do bitcoin agora?\"</i>…\n\n"
                 "Para voltar a registrar gastos, digite <b>sair</b>. Para ver o menu, digite <b>menu</b>.")
         else:
-            await responder(_texto_menu(perfil), _teclado_menu(perfil))
+            await responder(_texto_menu(perfil, origem), _teclado_menu(perfil, alertas))
     except Exception as e:
         print(f"❌ Investimentos ({acao}): {e}")
         await responder("❌ Não consegui buscar agora. Tente de novo em instantes.", _teclado_voltar())
@@ -802,7 +1084,108 @@ async def interceptar_mensagem(update: Update, context: ContextTypes.DEFAULT_TYP
     return False
 
 
+def _em_horario_de_silencio():
+    try:
+        from zoneinfo import ZoneInfo
+        hora = datetime.now(ZoneInfo("America/Sao_Paulo")).hour
+    except Exception:
+        hora = (datetime.now(timezone.utc) - timedelta(hours=3)).hour
+    ini, fim = HORA_SILENCIO
+    return hora >= ini or hora < fim
+
+
+def _usuarios_com_alertas():
+    conexao = _deps["obter_conexao"]()
+    try:
+        with conexao.cursor() as cursor:
+            cursor.execute("""
+                SELECT u.telegram_id, u.perfil_investidor, e.assinatura, e.enviado_em
+                FROM users u LEFT JOIN invest_alertas_estado e ON e.telegram_id = u.telegram_id
+                WHERE u.alertas_invest = TRUE AND u.telegram_id IS NOT NULL AND u.perfil_investidor IS NOT NULL;
+            """)
+            return cursor.fetchall()
+    finally:
+        conexao.close()
+
+
+def _registrar_envio(tid, assinatura):
+    conexao = _deps["obter_conexao"]()
+    try:
+        with conexao.cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO invest_alertas_estado (telegram_id, assinatura, enviado_em)
+                VALUES (%s, %s, CURRENT_TIMESTAMP)
+                ON CONFLICT (telegram_id) DO UPDATE SET assinatura = EXCLUDED.assinatura, enviado_em = CURRENT_TIMESTAMP;
+            """, (tid, assinatura))
+        conexao.commit()
+    finally:
+        conexao.close()
+
+
+async def _enviar_alerta(bot, tid, perfil):
+    """Gera e envia o alerta do perfil. Retorna a assinatura enviada (ou None)."""
+    pronto = await asyncio.to_thread(montar_alerta, perfil)
+    if not pronto:
+        return None
+    texto, assinatura = pronto
+    try:
+        await bot.send_message(chat_id=tid, text=texto, parse_mode="HTML", disable_web_page_preview=True)
+    except Exception as e:
+        if "blocked" in str(e).lower() or "forbidden" in str(e).lower() or "chat not found" in str(e).lower():
+            await asyncio.to_thread(_gravar_alertas, "telegram_id", tid, False)   # bloqueou o bot: para de tentar
+        print(f"⚠️ Alerta não enviado ({tid}): {e}")
+        return None
+    await asyncio.to_thread(_registrar_envio, tid, assinatura)
+    return assinatura
+
+
+async def _enviar_primeiro_alerta(bot, tid):
+    """Ao ligar os alertas, manda logo um retrato do momento (ignora o horário de silêncio: foi o usuário que pediu)."""
+    try:
+        perfil = await asyncio.to_thread(perfil_por_telegram, tid)
+        if perfil and not await _enviar_alerta(bot, tid, perfil):
+            await bot.send_message(chat_id=tid, text="Ainda não consegui montar o primeiro alerta. Aviso assim que tiver novidades.")
+    except Exception as e:
+        print(f"❌ Primeiro alerta ({tid}): {e}")
+
+
+async def _job_alertas(context: ContextTypes.DEFAULT_TYPE):
+    """Roda a cada 30 min: avisa quem ligou os alertas quando o conselho ou as manchetes principais mudaram."""
+    if _em_horario_de_silencio():
+        return
+    try:
+        usuarios = await asyncio.to_thread(_usuarios_com_alertas)
+    except Exception as e:
+        print(f"❌ Alertas (lista): {e}")
+        return
+    agora = datetime.now()
+    sinais = {}   # perfil -> (texto, assinatura): monta uma vez por perfil
+    for tid, perfil, ultima_assin, enviado_em in usuarios:
+        perfil = _perfil_valido(perfil)
+        if not perfil:
+            continue
+        if enviado_em and (agora - enviado_em).total_seconds() < PAUSA_ENTRE_ALERTAS:
+            continue
+        try:
+            if perfil not in sinais:
+                sinais[perfil] = await asyncio.to_thread(montar_alerta, perfil)
+            pronto = sinais[perfil]
+            if not pronto or pronto[1] == ultima_assin:
+                continue
+            await context.bot.send_message(chat_id=tid, text=pronto[0], parse_mode="HTML", disable_web_page_preview=True)
+            await asyncio.to_thread(_registrar_envio, tid, pronto[1])
+        except Exception as e:
+            if any(w in str(e).lower() for w in ("blocked", "forbidden", "chat not found")):
+                await asyncio.to_thread(_gravar_alertas, "telegram_id", tid, False)
+            print(f"⚠️ Alerta ({tid}): {e}")
+        await asyncio.sleep(0.1)
+
+
 def registrar_telegram(app):
+    if app.job_queue:
+        app.job_queue.run_repeating(_job_alertas, interval=INTERVALO_ALERTAS, first=90, name="alertas_investimentos")
+    else:
+        print('⚠️ Alertas de investimentos desligados: instale com  pip install "python-telegram-bot[job-queue]"')
     app.add_handler(CommandHandler("investir", comando_investir))
     app.add_handler(CommandHandler("investimentos", comando_investir))
     app.add_handler(CallbackQueryHandler(tratar_callback, pattern=r"^inv:"))
