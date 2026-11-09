@@ -2,6 +2,7 @@ import os
 import json
 import re
 import psycopg2
+import asyncio
 from groq import Groq
 from dotenv import load_dotenv
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup
@@ -427,6 +428,15 @@ def criar_tabelas():
         );
         """)
 
+        # Alertas de poupança (opt-in, no máximo 1 por semana)
+        cursor.execute("""
+        CREATE TABLE IF NOT EXISTS poupanca_alertas (
+            telegram_id TEXT PRIMARY KEY,
+            ativo BOOLEAN NOT NULL DEFAULT FALSE,
+            ultimo_envio TIMESTAMP
+        );
+        """)
+
         conexao.commit()
         print("Tabelas e índices sincronizados com sucesso!")
 
@@ -581,6 +591,21 @@ def api_transacoes():
         "poupanca_periodo": round(poupanca_periodo, 2),
         "transacoes": [i[3] for i in itens]
     })
+
+@app_web.route('/api/saldo-atual', methods=['GET'])
+def api_saldo_atual():
+    tid, erro = _exigir_usuario()
+    if erro:
+        return erro
+    if not tid:
+        return jsonify({"vinculado": False, "saldo": 0})
+    conexao = obter_conexao()
+    try:
+        with conexao.cursor() as cursor:
+            saldo = saldo_disponivel(cursor, tid)
+    finally:
+        conexao.close()
+    return jsonify({"vinculado": True, "saldo": round(saldo, 2)})
 
 # ==========================================
 # ORÇAMENTOS, POUPANÇA E RELATÓRIOS
@@ -2618,6 +2643,19 @@ async def processar_mensagem(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await pedir_confirmacao_exclusao_lancamento(update, context, user_id, int(match_exclusao.group(1)))
         return
 
+    # Interceptador de Meta de poupança ("definir meta de 5000", "remover meta", "minha meta")
+    if PADRAO_REMOVER_META.match(texto_lower):
+        await pedir_confirmacao_remover_meta(update, context, user_id)
+        return
+    if PADRAO_VER_META.match(texto_lower):
+        await responder_ver_meta(update, user_id)
+        return
+    m_meta = (PADRAO_DEFINIR_META.match(texto_lower) or PADRAO_META_E.match(texto_lower)
+              or PADRAO_QUERO_JUNTAR.match(texto_lower))
+    if m_meta:
+        await responder_definir_meta(update, user_id, m_meta.group(1))
+        return
+
     # Interceptador de Poupança (guardar / sacar / consultar)
     m_guardar = PADRAO_POUPAR.match(texto_lower) or PADRAO_DEPOSITAR.match(texto_lower)
     if m_guardar:
@@ -3329,6 +3367,18 @@ async def tratar_conversa_pendente(update: Update, context: ContextTypes.DEFAULT
                 await responder("Responda *sim* para excluir ou *não* para cancelar.")
             return True
 
+        if etapa == 'remover_meta':
+            if resp in RESP_SIM:
+                context.user_data.pop('conversa', None)
+                await asyncio.to_thread(gravar_meta_poupanca, user_id, None)
+                await responder("🗑️ Meta de poupança removida. O dinheiro guardado continua igual.")
+            elif resp in RESP_NAO:
+                context.user_data.pop('conversa', None)
+                await responder("Tudo bem, a meta foi mantida. ✅")
+            else:
+                await responder("Responda *sim* para remover ou *não* para cancelar.")
+            return True
+
         if etapa == 'excluir_lancamento':
             id_ = conversa['id']
             if resp in RESP_SIM:
@@ -3617,7 +3667,8 @@ TUTORIAIS_MENU = {
         "🐷 <b>Tutorial: poupança</b>\n\n"
         "• <b>Guardar:</b> <i>guardar 200</i> ou /guardar 200\n"
         "• <b>Sacar:</b> <i>sacar 100 da poupança</i> ou /sacar 100\n"
-        "• <b>Ver o total guardado:</b> <i>minha poupança</i> ou /poupanca\n\n"
+        "• <b>Ver o total guardado:</b> <i>minha poupança</i> ou /poupanca\n"
+        "• <b>Meta:</b> <i>/meta 5000</i> para definir, /meta para ver e <i>/meta remover</i> para apagar\n\n"
         "Guardar dinheiro não conta como gasto. Você também pode definir uma <b>meta de poupança</b> "
         "na página Orçamentos do site e acompanhar o progresso por aqui e no painel."),
     "categorias": (
@@ -3798,6 +3849,349 @@ async def interceptar_saudacao_e_menu(update: Update, context: ContextTypes.DEFA
         return True
     return False
 
+# ==========================================
+# META DE POUPANÇA PELO TELEGRAM
+# ==========================================
+PADRAO_DEFINIR_META = re.compile(
+    r'^(?:definir|defino|criar|crio|colocar|coloco|alterar|altero|mudar|mudo|ajustar|ajusto|quero\s+(?:definir|criar|ter))'
+    r'\s+(?:uma\s+|minha\s+|a\s+)?meta(?:\s+de\s+poupan[çc]a)?(?:\s+(?:de|para|em|como))?\s*(?:r\$\s*)?(\d[\d.,]*)(?:\s*reais)?\s*$')
+PADRAO_META_E = re.compile(
+    r'^(?:minha\s+)?meta(?:\s+de\s+poupan[çc]a)?\s+(?:[eé]|ser[aá]|fica|vai\s+ser)\s*(?:de\s+)?(?:r\$\s*)?(\d[\d.,]*)(?:\s*reais)?\s*$')
+PADRAO_QUERO_JUNTAR = re.compile(
+    r'^(?:quero|vou|pretendo)\s+(?:juntar|poupar|guardar)\s+(?:r\$\s*)?(\d[\d.,]*)(?:\s*reais)?\s*$')
+PADRAO_REMOVER_META = re.compile(
+    r'^(?:remover|remova|apagar|apague|excluir|exclua|deletar|tirar)\s+(?:a\s+|minha\s+)?meta(?:\s+de\s+poupan[çc]a)?\s*$')
+PADRAO_VER_META = re.compile(r'^(?:minha\s+meta(?:\s+de\s+poupan[çc]a)?|ver\s+(?:minha\s+)?meta|qual\s+(?:[eé]\s+)?a?\s*minha\s+meta)\s*\??$')
+
+
+def obter_meta_poupanca(telegram_id):
+    """Devolve (guardado, meta) — meta é None se não houver."""
+    tid = str(telegram_id).strip()
+    conexao = obter_conexao()
+    try:
+        with conexao.cursor() as cursor:
+            guardado = saldo_poupanca(cursor, tid)
+            cursor.execute("SELECT valor_meta FROM savings_goals WHERE telegram_id = %s;", (tid,))
+            row = cursor.fetchone()
+        return guardado, (float(row[0]) if row else None)
+    finally:
+        conexao.close()
+
+
+def gravar_meta_poupanca(telegram_id, valor):
+    """valor=None remove a meta."""
+    tid = str(telegram_id).strip()
+    conexao = obter_conexao()
+    try:
+        with conexao.cursor() as cursor:
+            if valor is None:
+                cursor.execute("DELETE FROM savings_goals WHERE telegram_id = %s;", (tid,))
+            else:
+                cursor.execute("""
+                    INSERT INTO savings_goals (telegram_id, valor_meta) VALUES (%s, %s)
+                    ON CONFLICT (telegram_id) DO UPDATE
+                    SET valor_meta = EXCLUDED.valor_meta, atualizado_em = CURRENT_TIMESTAMP;
+                """, (tid, valor))
+        conexao.commit()
+    except Exception:
+        conexao.rollback()
+        raise
+    finally:
+        conexao.close()
+
+
+def texto_progresso_meta(guardado, meta):
+    if guardado >= meta:
+        return f"🏆 Você já guardou {fmt_brl(guardado)}: a meta está atingida!"
+    pct = guardado / meta * 100
+    return (f"💰 Guardado até agora: {fmt_brl(guardado)} ({pct:.0f}% da meta)\n"
+            f"Faltam {fmt_brl(meta - guardado)}.")
+
+
+async def responder_ver_meta(update: Update, user_id: str):
+    guardado, meta = await asyncio.to_thread(obter_meta_poupanca, user_id)
+    if not meta:
+        await update.message.reply_text(
+            "🎯 Você ainda não tem uma meta de poupança.\n\n"
+            "Defina uma enviando, por exemplo: /meta 5000\n"
+            "Dica: uma boa referência é a reserva de emergência, de 3 meses de gastos.")
+        return
+    await update.message.reply_text(
+        f"🎯 Sua meta de poupança: {fmt_brl(meta)}\n\n{texto_progresso_meta(guardado, meta)}\n\n"
+        "Para alterar: /meta 8000\nPara remover: /meta remover")
+
+
+async def responder_definir_meta(update: Update, user_id: str, valor_txt: str):
+    valor = parse_valor_br(valor_txt)
+    if not valor:
+        await update.message.reply_text("❌ Informe um valor válido. Exemplo: /meta 5000")
+        return
+    if not usuario_esta_vinculado(user_id):
+        await update.message.reply_text("⚠️ Vincule sua conta primeiro com /login <email_ou_telefone> <senha>.")
+        return
+    try:
+        _, meta_antiga = await asyncio.to_thread(obter_meta_poupanca, user_id)
+        await asyncio.to_thread(gravar_meta_poupanca, user_id, valor)
+        guardado, _ = await asyncio.to_thread(obter_meta_poupanca, user_id)
+    except Exception as e:
+        print(f"❌ Erro ao salvar meta: {e}")
+        await update.message.reply_text("❌ Não consegui salvar a meta agora. Tente novamente em instantes.")
+        return
+    titulo = "🎯 Meta atualizada!" if meta_antiga else "🎯 Meta definida!"
+    await update.message.reply_text(
+        f"{titulo} {fmt_brl(valor)}\n\n{texto_progresso_meta(guardado, valor)}\n\n"
+        "Para guardar dinheiro: guardar 200\nPara ver sua meta: /meta")
+
+
+async def pedir_confirmacao_remover_meta(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: str):
+    _, meta = await asyncio.to_thread(obter_meta_poupanca, user_id)
+    if not meta:
+        await update.message.reply_text("Você não tem uma meta de poupança definida.")
+        return
+    _iniciar_conversa(context, 'remover_meta')
+    await update.message.reply_text(
+        f"⚠️ Tem certeza que deseja remover a sua meta de {fmt_brl(meta)}?\n\n"
+        "Será apagada só a meta. O dinheiro guardado não muda.\n\n"
+        "Responda sim para remover ou não para cancelar.")
+
+
+async def comando_meta(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    if not usuario_esta_vinculado(user_id):
+        await update.message.reply_text("⚠️ Vincule sua conta primeiro com /login <email_ou_telefone> <senha>.")
+        return
+    if not context.args:
+        await responder_ver_meta(update, user_id)
+        return
+    arg = " ".join(context.args).strip().lower()
+    if arg in ("remover", "apagar", "excluir", "deletar", "tirar", "0"):
+        await pedir_confirmacao_remover_meta(update, context, user_id)
+        return
+    await responder_definir_meta(update, user_id, arg)
+
+# ==========================================
+# ALERTAS DE POUPANÇA (incentivo a guardar, alinhado à meta)
+# ==========================================
+POUPANCA_PAUSA_SEG = 7 * 24 * 3600     # no máximo 1 aviso por semana
+POUPANCA_HORAS = (9, 20)               # só das 9h às 20h
+POUPANCA_INTERVALO_JOB = 1800          # o robô confere a cada 30 min
+
+
+def _dentro_do_horario_poupanca() -> bool:
+    try:
+        from zoneinfo import ZoneInfo
+        hora = datetime.now(ZoneInfo("America/Sao_Paulo")).hour
+    except Exception:
+        hora = datetime.now().hour
+    return POUPANCA_HORAS[0] <= hora < POUPANCA_HORAS[1]
+
+
+def salvar_alerta_poupanca(telegram_id, ativo):
+    conexao = obter_conexao()
+    try:
+        with conexao.cursor() as cursor:
+            # ao ligar, zera o último envio: o primeiro aviso vem na hora (Telegram) ou no próximo ciclo (site)
+            cursor.execute("""
+                INSERT INTO poupanca_alertas (telegram_id, ativo, ultimo_envio)
+                VALUES (%s, %s, NULL)
+                ON CONFLICT (telegram_id) DO UPDATE
+                SET ativo = EXCLUDED.ativo,
+                    ultimo_envio = CASE WHEN EXCLUDED.ativo THEN NULL ELSE poupanca_alertas.ultimo_envio END;
+            """, (str(telegram_id).strip(), bool(ativo)))
+        conexao.commit()
+    except Exception:
+        conexao.rollback()
+        raise
+    finally:
+        conexao.close()
+
+
+def alerta_poupanca_ativo(telegram_id) -> bool:
+    conexao = obter_conexao()
+    try:
+        with conexao.cursor() as cursor:
+            cursor.execute("SELECT ativo FROM poupanca_alertas WHERE telegram_id = %s;", (str(telegram_id).strip(),))
+            row = cursor.fetchone()
+        return bool(row and row[0])
+    finally:
+        conexao.close()
+
+
+def _marcar_envio_poupanca(telegram_id):
+    conexao = obter_conexao()
+    try:
+        with conexao.cursor() as cursor:
+            cursor.execute("UPDATE poupanca_alertas SET ultimo_envio = CURRENT_TIMESTAMP WHERE telegram_id = %s;",
+                           (str(telegram_id).strip(),))
+        conexao.commit()
+    finally:
+        conexao.close()
+
+
+def situacao_poupanca(telegram_id):
+    """Números que personalizam o aviso: guardado, meta, saldo livre, o que guardou na semana e uma meta sugerida."""
+    tid = str(telegram_id).strip()
+    conexao = obter_conexao()
+    try:
+        with conexao.cursor() as cursor:
+            guardado = saldo_poupanca(cursor, tid)
+            livre = saldo_disponivel(cursor, tid)
+            cursor.execute("SELECT valor_meta FROM savings_goals WHERE telegram_id = %s;", (tid,))
+            r = cursor.fetchone()
+            meta = float(r[0]) if r else None
+            cursor.execute("""
+                SELECT COALESCE(SUM(valor), 0) FROM savings_movements
+                WHERE TRIM(telegram_id) = %s AND tipo = 'deposito' AND data >= %s;
+            """, (tid, datetime.now() - timedelta(days=7)))
+            guardou_semana = float(cursor.fetchone()[0])
+            cursor.execute("""
+                SELECT COALESCE(SUM(valor), 0) FROM transactions
+                WHERE TRIM(telegram_id) = %s AND tipo = 'despesa' AND data >= %s;
+            """, (tid, datetime.now() - timedelta(days=90)))
+            gasto_90 = float(cursor.fetchone()[0])
+    finally:
+        conexao.close()
+    # reserva de emergência = 3 meses de gastos (os últimos 90 dias), arredondada para centenas
+    sugestao_meta = round(gasto_90 / 100) * 100 if gasto_90 >= 50 else None
+    return {"guardado": guardado, "meta": meta, "livre": livre,
+            "guardou_semana": guardou_semana, "sugestao_meta": sugestao_meta or None}
+
+
+def montar_texto_poupanca(s) -> str:
+    guardado, meta, livre = s["guardado"], s["meta"], s["livre"]
+    linhas = []
+    if s["guardou_semana"] > 0:
+        linhas += [f"👏 Você guardou {fmt_brl(s['guardou_semana'])} nos últimos 7 dias. Continue assim!", ""]
+
+    if not meta:
+        linhas += ["🎯 Que tal definir uma meta de poupança?", "",
+                   f"Você já tem {fmt_brl(guardado)} guardado. Quem tem uma meta clara guarda com muito mais constância."]
+        if s["sugestao_meta"]:
+            linhas.append(f"Uma boa referência é uma reserva de emergência de 3 meses de gastos. "
+                          f"Pelo seu histórico, algo perto de {fmt_brl(s['sugestao_meta'])}.")
+        linhas += ["", "Para definir agora, é só enviar: /meta 5000 (troque pelo valor que quiser)."]
+    elif guardado >= meta:
+        linhas += ["🏆 Meta de poupança atingida! Parabéns!", "",
+                   f"Você guardou {fmt_brl(guardado)} e a meta era {fmt_brl(meta)}.",
+                   "Que tal definir uma meta maior na página Orçamentos ou conhecer opções para fazer esse dinheiro render? "
+                   "Envie /investir para ver o menu de investimentos."]
+    else:
+        pct = guardado / meta * 100
+        falta = meta - guardado
+        if pct < 25:
+            fase = "Os primeiros passos são os mais importantes."
+        elif pct < 50:
+            fase = "Você já percorreu um bom pedaço do caminho."
+        elif pct < 75:
+            fase = "Mais da metade do caminho feita!"
+        else:
+            fase = "Reta final: falta pouco!"
+        linhas += [f"🎯 Sua meta de poupança está em {pct:.0f}%", "",
+                   f"{fase} Você tem {fmt_brl(guardado)} de {fmt_brl(meta)}. Faltam {fmt_brl(falta)}.", ""]
+        if livre > 0:
+            sug = min(falta, livre)
+            sug = float(int(sug)) if sug >= 10 else round(sug, 2)
+            cmd = f"{sug:.2f}".replace(".", ",")
+            linhas += [f"💵 Seu saldo disponível é de {fmt_brl(livre)}. Guardar {fmt_brl(sug)} agora já aproxima você da meta.",
+                       f"É só enviar: guardar {cmd}"]
+        else:
+            linhas.append("💡 Seu saldo disponível está zerado agora. Segurar os gastos desta semana ajuda "
+                          "você a voltar a guardar.")
+    linhas += ["", "Para pausar estes avisos: /alertapoupanca off"]
+    return "\n".join(linhas)
+
+
+async def _enviar_alerta_poupanca(bot, telegram_id):
+    s = await asyncio.to_thread(situacao_poupanca, telegram_id)
+    await bot.send_message(chat_id=telegram_id, text=montar_texto_poupanca(s))
+    await asyncio.to_thread(_marcar_envio_poupanca, telegram_id)
+
+
+def _usuarios_alerta_poupanca():
+    conexao = obter_conexao()
+    try:
+        with conexao.cursor() as cursor:
+            cursor.execute("""
+                SELECT p.telegram_id, p.ultimo_envio
+                FROM poupanca_alertas p JOIN users u ON u.telegram_id = p.telegram_id
+                WHERE p.ativo = TRUE;
+            """)
+            return cursor.fetchall()
+    finally:
+        conexao.close()
+
+
+async def _job_alertas_poupanca(context: ContextTypes.DEFAULT_TYPE):
+    """Roda a cada 30 min: manda o lembrete a quem ligou, no máximo 1 vez por semana e só de dia."""
+    if not _dentro_do_horario_poupanca():
+        return
+    try:
+        usuarios = await asyncio.to_thread(_usuarios_alerta_poupanca)
+    except Exception as e:
+        print(f"❌ Alertas de poupança (lista): {e}")
+        return
+    agora = datetime.now()
+    for tid, ultimo in usuarios:
+        if ultimo and (agora - ultimo).total_seconds() < POUPANCA_PAUSA_SEG:
+            continue
+        try:
+            await _enviar_alerta_poupanca(context.bot, tid)
+        except Exception as e:
+            if any(w in str(e).lower() for w in ("blocked", "forbidden", "chat not found")):
+                await asyncio.to_thread(salvar_alerta_poupanca, tid, False)   # bloqueou o bot: para de tentar
+            print(f"⚠️ Alerta de poupança ({tid}): {e}")
+        await asyncio.sleep(0.1)
+
+
+async def comando_alerta_poupanca(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = str(update.effective_user.id)
+    if not usuario_esta_vinculado(user_id):
+        await update.message.reply_text("⚠️ Vincule sua conta primeiro com /login <email_ou_telefone> <senha>.")
+        return
+    arg = context.args[0].strip().lower() if context.args else ""
+    if arg in ("on", "ligar", "ativar"):
+        salvar_alerta_poupanca(user_id, True)
+        await update.message.reply_text("🔔 Alertas de poupança ligados! Vou te incentivar a guardar, "
+                                        "no máximo uma vez por semana e nunca de madrugada.")
+        try:
+            await _enviar_alerta_poupanca(context.bot, user_id)
+        except Exception as e:
+            print(f"⚠️ Primeiro alerta de poupança: {e}")
+        return
+    if arg in ("off", "desligar", "desativar"):
+        salvar_alerta_poupanca(user_id, False)
+        await update.message.reply_text("🔕 Alertas de poupança desligados. Você pode ligar de novo quando quiser.")
+        return
+    ativo = alerta_poupanca_ativo(user_id)
+    await update.message.reply_text(
+        f"{'🔔' if ativo else '🔕'} Alertas de poupança: {'ligados' if ativo else 'desligados'}\n\n"
+        "Lembretes semanais para você guardar dinheiro, alinhados à sua meta.\n"
+        "• /alertapoupanca on para ligar\n• /alertapoupanca off para desligar")
+
+
+# ---------- API do site ----------
+@app_web.route('/api/alertas-poupanca', methods=['GET'])
+def api_alerta_poupanca_get():
+    tid, erro = _exigir_usuario()
+    if erro:
+        return erro
+    if not tid:
+        return jsonify({"ativo": False, "vinculado": False})
+    return jsonify({"ativo": alerta_poupanca_ativo(tid), "vinculado": True})
+
+
+@app_web.route('/api/alertas-poupanca', methods=['PUT'])
+def api_alerta_poupanca_put():
+    tid, erro = _exigir_usuario()
+    if erro:
+        return erro
+    ativo = (request.get_json(silent=True) or {}).get('ativo')
+    if not isinstance(ativo, bool):
+        return jsonify({"erro": "Valor inválido"}), 400
+    if not tid:
+        return jsonify({"erro": "Vincule sua conta ao bot do Telegram para receber os alertas."}), 400
+    salvar_alerta_poupanca(tid, ativo)
+    return jsonify({"sucesso": True, "ativo": ativo})
 
 # ==========================================
 # MÓDULO DE INVESTIMENTOS
@@ -3839,7 +4233,9 @@ if __name__ == "__main__":
         app.add_handler(CommandHandler("help", comando_menu))
         app.add_handler(CallbackQueryHandler(tratar_callback_menu, pattern=r"^menu:"))
         app.add_handler(CommandHandler("start", processar_mensagem))   # ativa a conta ou dá as boas-vindas
-
+        app.add_handler(CommandHandler("alertapoupanca", comando_alerta_poupanca))
+        if app.job_queue:
+            app.job_queue.run_repeating(_job_alertas_poupanca, interval=POUPANCA_INTERVALO_JOB, first=120, name="alertas_poupanca")
         app.add_handler(CommandHandler("resumo", comando_resumo))
         app.add_handler(CommandHandler("deletar", comando_deletar))
         app.add_handler(CommandHandler("apagar", comando_deletar))
@@ -3853,6 +4249,7 @@ if __name__ == "__main__":
         app.add_handler(CommandHandler("login", processar_mensagem))
         app.add_handler(CommandHandler("alertas", comando_alertas))
         app.add_handler(CommandHandler("previsao", comando_previsao))
+        app.add_handler(CommandHandler("meta", comando_meta))
 
         # Registra tratador de texto E compartilhamento de contatos
         app.add_handler(

@@ -27,6 +27,14 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <!-- CSS Customizado -->
     <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <style>
+        @media print {
+            #sidebar, #sidebar-backdrop, .no-print { display: none !important; }
+            body { display: block !important; height: auto !important; overflow: visible !important; background: #fff !important; }
+            .print-root, .print-main { overflow: visible !important; height: auto !important; }
+            .bg-white { break-inside: avoid; box-shadow: none !important; }
+        }
+    </style>
 </head>
 
 <body class="bg-slate-100 text-slate-800 antialiased flex h-screen overflow-hidden">
@@ -88,7 +96,7 @@
     </aside>
 
     <!-- Main Content Area -->
-    <div class="flex-1 flex flex-col h-full overflow-hidden">
+    <div class="flex-1 flex flex-col h-full overflow-hidden print-root">
 
         <!-- Top Header Bar -->
         <header class="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between shadow-sm z-10">
@@ -101,15 +109,10 @@
             </div>
 
             <div class="flex items-center gap-4">
-                <!-- Seletor Exclusivo de Mês e Ano -->
-                <div
-                    class="relative flex items-center bg-slate-50 p-2 rounded-xl border border-slate-200 cursor-pointer">
-                    <i class="fa-solid fa-calendar-days text-slate-500 pl-2 pr-1"></i>
-                    <input type="month" id="filtro-mes"
-                        class="bg-transparent text-sm font-semibold text-slate-700 focus:outline-none cursor-pointer pr-2"
-                        onchange="aoMudarMes(this.value)" />
+                <div class="flex items-center gap-2 flex-wrap justify-end no-print">
+                    <button onclick="exportarCSV()" class="px-3.5 py-2.5 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 text-sm font-semibold rounded-xl"><i class="fa-solid fa-file-csv mr-1.5 text-emerald-600"></i>CSV / Excel</button>
+                    <button onclick="exportarPDF()" class="px-3.5 py-2.5 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 text-sm font-semibold rounded-xl"><i class="fa-solid fa-file-pdf mr-1.5 text-red-500"></i>PDF</button>
                 </div>
-
                 <!-- Perfil do Usuário (clique para abrir o perfil) -->
                 <a href="/perfil" class="flex items-center gap-3" title="Meu perfil">
                     <span class="font-medium text-slate-700 hidden sm:inline-block" id="user-name">Carregando...</span>
@@ -120,60 +123,86 @@
         </header>
 
         <!-- Main Dashboard Content -->
-        <main class="flex-1 overflow-y-auto p-4 md:p-6 bg-slate-100">
+        <main class="flex-1 overflow-y-auto p-4 md:p-6 bg-slate-100 print-main">
             <div class="max-w-7xl mx-auto space-y-6">
 
                 <!-- Lembrete de e-mail digitado errado (preenchido pelo dashboard.js) -->
                 <div id="email-alert-container"></div>
 
-                <!-- CARDS: POUPANÇA + INVESTIMENTOS -->
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <!-- CARDS: SALDO + POUPANÇA + INVESTIMENTOS -->
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+
+                    <!-- CARD DE SALDO ATUAL (não depende do seletor de mês) -->
+                    <div
+                        class="bg-white rounded-2xl p-4 shadow-sm border border-slate-200/80 flex items-center justify-between gap-2">
+                        <div class="flex items-center gap-3 min-w-0">
+                            <div
+                                class="w-10 h-10 shrink-0 rounded-xl bg-orange-100 text-orange-500 flex items-center justify-center font-bold text-lg">
+                                <i class="fa-solid fa-scale-balanced"></i>
+                            </div>
+                            <div class="min-w-0">
+                                <span class="block text-[11px] font-semibold uppercase text-slate-400 truncate">Saldo atual</span>
+                                <h3 class="text-xl font-extrabold text-slate-800 truncate" id="saldo-atual-card">R$ 0,00</h3>
+                            </div>
+                        </div>
+                        <a href="/transacoes"
+                            class="shrink-0 whitespace-nowrap text-[11px] font-medium text-orange-600 bg-orange-50 hover:bg-orange-100 px-2.5 py-1 rounded-full border border-orange-100 transition">
+                            Ver detalhes
+                        </a>
+                    </div>
 
                     <!-- CARD DE POUPANÇA / RESERVA DE EMERGÊNCIA -->
                     <div
-                        class="bg-white rounded-2xl p-5 shadow-sm border border-slate-200/80 flex items-center justify-between">
-                        <div class="flex items-center gap-4">
+                        class="bg-white rounded-2xl p-4 shadow-sm border border-slate-200/80 flex items-center justify-between gap-2">
+                        <div class="flex items-center gap-3 min-w-0">
                             <div
-                                class="w-12 h-12 rounded-xl bg-emerald-100 text-emerald-600 flex items-center justify-center font-bold text-xl">
+                                class="w-10 h-10 shrink-0 rounded-xl bg-emerald-100 text-emerald-600 flex items-center justify-center font-bold text-lg">
                                 <i class="fa-solid fa-piggy-bank"></i>
                             </div>
-                            <div>
-                                <span class="text-xs font-semibold uppercase text-slate-400">Total Guardado /
+                            <div class="min-w-0">
+                                <span class="block text-[11px] font-semibold uppercase text-slate-400 truncate">Total Guardado /
                                     Poupança</span>
-                                <h3 class="text-2xl font-extrabold text-slate-800" id="total-poupanca">R$ 0,00</h3>
-                                <p id="meta-poupanca-texto" class="hidden text-xs text-slate-500 mt-0.5"></p>
+                                <h3 class="text-xl font-extrabold text-slate-800 truncate" id="total-poupanca">R$ 0,00</h3>
+                                <p id="meta-poupanca-texto" class="hidden text-[11px] text-slate-500 mt-0.5 truncate"></p>
                             </div>
                         </div>
-                        <a href="/orcamentos#poupanca"
-                            class="text-xs font-medium text-emerald-600 bg-emerald-50 hover:bg-emerald-100 px-3 py-1 rounded-full border border-emerald-100 transition">
+                        <a href="/orcamentos"
+                            class="shrink-0 whitespace-nowrap text-[11px] font-medium text-emerald-600 bg-emerald-50 hover:bg-emerald-100 px-2.5 py-1 rounded-full border border-emerald-100 transition">
                             Ver detalhes
                         </a>
                     </div>
 
                     <!-- CARD DE INVESTIMENTOS -->
                     <div
-                        class="bg-white rounded-2xl p-5 shadow-sm border border-slate-200/80 flex items-center justify-between">
-                        <div class="flex items-center gap-4">
+                        class="bg-white rounded-2xl p-4 shadow-sm border border-slate-200/80 flex items-center justify-between gap-2">
+                        <div class="flex items-center gap-3 min-w-0">
                             <div
-                                class="w-12 h-12 rounded-xl bg-blue-100 text-blue-600 flex items-center justify-center font-bold text-xl">
+                                class="w-10 h-10 shrink-0 rounded-xl bg-blue-100 text-blue-600 flex items-center justify-center font-bold text-lg">
                                 <i class="fa-solid fa-arrow-trend-up"></i>
                             </div>
-                            <div>
-                                <span class="text-xs font-semibold uppercase text-slate-400">Investimentos</span>
-                                <h3 class="text-2xl font-extrabold text-slate-800" id="total-investimentos">R$ 0,00</h3>
-                                <p class="text-xs text-slate-500 mt-0.5" id="investimentos-resumo">
-                                    Entradas: R$ 0,00 • Saídas: R$ 0,00
-                                </p>
+                            <div class="min-w-0">
+                                <span class="block text-[11px] font-semibold uppercase text-slate-400 truncate">Investimentos</span>
+                                <h3 class="text-xl font-extrabold text-slate-800 truncate" id="total-investimentos">R$ 0,00</h3>
                             </div>
                         </div>
                         <a href="/investimentos"
-                            class="text-xs font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 px-3 py-1 rounded-full border border-blue-100 transition">
+                            class="shrink-0 whitespace-nowrap text-[11px] font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 px-2.5 py-1 rounded-full border border-blue-100 transition">
                             Ver detalhes
                         </a>
                     </div>
 
                 </div>
-
+                <hr class="border-slate-200">
+                <!-- Resumo do período: o seletor de mês filtra os gráficos abaixo -->
+                <div class="flex items-center justify-between gap-3">
+                    <h2 class="text-sm font-bold text-slate-700">Resumo do período</h2>
+                    <div class="flex items-center bg-white p-2 rounded-xl border border-slate-200 shadow-sm cursor-pointer">
+                        <i class="fa-solid fa-calendar-days text-slate-500 pl-2 pr-1"></i>
+                        <input type="month" id="filtro-mes"
+                            class="bg-transparent text-sm font-semibold text-slate-700 focus:outline-none cursor-pointer pr-2"
+                            onchange="aoMudarMes(this.value)" />
+                    </div>
+                </div>
                 <!-- Dashboard Grid Layout -->
                 <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
 
@@ -409,6 +438,90 @@
                     mostrarAvisos(['Não foi possível carregar a previsão agora.']);
                 }
             })();
+    </script>
+    <script>
+        (async function carregarSaldoAtual() {
+            const el = document.getElementById('saldo-atual-card');
+            const atualizar = async () => {
+                try {
+                    const res = await fetch('/api/saldo-atual');
+                    if (!res.ok) return;
+                    const d = await res.json();
+                    const saldo = Number(d.saldo || 0);
+                    el.textContent = saldo.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+                    el.className = 'text-xl font-extrabold truncate ' + (saldo < 0 ? 'text-red-500' : 'text-slate-800');
+                } catch (e) { /* mantém o valor anterior se falhar */ }
+            };
+            atualizar();
+            setInterval(() => { if (!document.hidden) atualizar(); }, 30000);
+        })();
+
+        // ---------- Exportação ----------
+        const numCSV = (v) => Number(v || 0).toFixed(2).replace('.', ',');
+        const csvSeguro = (v) => { const s = v == null ? '' : String(v); return /^[=+\-@]/.test(s) ? "'" + s : s; };
+        function baixarCSV(linhas, nomeArquivo) {
+            const cel = (c) => { const s = String(c ?? ''); return /[;"\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+            const texto = linhas.map(l => l.map(cel).join(';')).join('\r\n');
+            const blob = new Blob(['\ufeff' + texto], { type: 'text/csv;charset=utf-8' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = nomeArquivo;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+        }
+
+        async function exportarCSV() {
+            const mesSel = document.getElementById('filtro-mes').value;
+            try {
+                const [r1, r2] = await Promise.all([
+                    fetch('/api/dados-dashboard' + (mesSel ? '?mes=' + encodeURIComponent(mesSel) : '')),
+                    fetch('/api/saldo-atual'),
+                ]);
+                if (!r1.ok) throw new Error('falha');
+                const d = await r1.json();
+                const s = r2.ok ? await r2.json() : null;
+                const t = d.totais || {};
+                const periodo = mesSel ? mesSel.slice(5) + '/' + mesSel.slice(0, 4) : 'Todo o período';
+
+                const linhas = [
+                    ['Visão geral Fincash - ' + periodo], [],
+                    ['Resumo'], ['Item', 'Valor (R$)'],
+                ];
+                if (s) linhas.push(['Saldo atual (acumulado)', numCSV(s.saldo)]);
+                linhas.push(
+                    ['Receitas do período', numCSV(t.renda)],
+                    ['Despesas do período', numCSV(t.despesa)],
+                    ['Guardado na poupança no período (líquido)', numCSV(t.poupanca_liquida)],
+                    ['Saldo do período (receitas - despesas - poupança líquida)', numCSV(t.saldo)],
+                    ['Total guardado na poupança (acumulado)', numCSV(t.poupanca)],
+                    ['Meta da poupança', t.meta_poupanca > 0 ? numCSV(t.meta_poupanca) : 'Não definida']);
+                if (d.investimentos) {
+                    linhas.push(['Investimentos - total (acumulado)', numCSV(d.investimentos.total)]);
+                }
+
+                linhas.push([], ['Despesas por categoria'], ['Categoria', 'Valor (R$)']);
+                const cats = d.categorias || { labels: [], valores: [] };
+                cats.labels.forEach((c, i) => linhas.push([csvSeguro(c || 'Sem categoria'), numCSV(cats.valores[i])]));
+
+                if (d.evolucao) {
+                    linhas.push([], ['Evolução do saldo'], ['Mês', 'Saldo acumulado (R$)']);
+                    d.evolucao.labels.forEach((l, i) => linhas.push([l, numCSV(d.evolucao.valores[i])]));
+                }
+                baixarCSV(linhas, 'fincash_visao-geral_' + (mesSel || 'todo-periodo') + '.csv');
+            } catch (e) {
+                alert('Não foi possível exportar agora. Tente de novo em instantes.');
+            }
+        }
+
+        function exportarPDF() {
+            const mesSel = document.getElementById('filtro-mes').value;
+            const titulo = document.title;
+            document.title = 'fincash-visao-geral-' + (mesSel || 'todo-periodo');
+            window.print();
+            document.title = titulo;
+        }
     </script>
     <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
 </body>

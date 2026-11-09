@@ -864,8 +864,8 @@ async def _passo_quiz(responder, tid, i, acumulado):
         [InlineKeyboardButton("✏️ Prefiro escolher outro perfil", callback_data="inv:perfil")],
         [InlineKeyboardButton("🔔 Receber alertas do meu perfil", callback_data="inv:alertas")],
     ])
-    await responder(f"🎉 <b>Seu perfil: {p['emoji']} {p['nome']}</b>\n"
-                    f"Pontuação: {pontos} de {4 * len(QUIZ)}\n\n{_h(p['descricao'])}\n\n"
+    await responder(f"🎉 <b>Seu perfil: {p['emoji']} {p['nome']}</b>\n\n"
+                    f"{_h(p['descricao'])}\n\n"
                     "✅ Já apliquei esse perfil nas suas notícias e dicas. "
                     "Se preferir outro (ou o perfil Cripto), é só trocar manualmente.\n\n"
                     f"ℹ️ <i>Resultado indicativo, não é recomendação de investimento.</i>", teclado)

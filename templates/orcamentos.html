@@ -77,9 +77,15 @@
                 </button>
                 <h1 class="text-2xl font-bold text-slate-800 tracking-tight">Orçamentos</h1>
             </div>
-            <div class="flex items-center bg-slate-50 p-2 rounded-xl border border-slate-200">
-                <i class="fa-solid fa-calendar-days text-slate-500 pl-2 pr-1"></i>
-                <input type="month" id="filtro-mes" class="bg-transparent text-sm font-semibold text-slate-700 focus:outline-none cursor-pointer pr-2" />
+            <div class="flex items-center gap-2 flex-wrap justify-end">
+                <div class="flex items-center bg-slate-50 p-2 rounded-xl border border-slate-200 no-print">
+                    <i class="fa-solid fa-calendar-days text-slate-500 pl-2 pr-1"></i>
+                    <input type="month" id="filtro-mes" class="bg-transparent text-sm font-semibold text-slate-700 focus:outline-none cursor-pointer pr-2" />
+                </div>
+                <div class="flex items-center gap-2 no-print">
+                    <button onclick="exportarCSV()" class="px-3.5 py-2.5 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 text-sm font-semibold rounded-xl"><i class="fa-solid fa-file-csv mr-1.5 text-emerald-600"></i>CSV / Excel</button>
+                    <button onclick="exportarPDF()" class="px-3.5 py-2.5 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 text-sm font-semibold rounded-xl"><i class="fa-solid fa-file-pdf mr-1.5 text-red-500"></i>PDF</button>
+                </div>
             </div>
         </header>
 
@@ -159,6 +165,26 @@
                             <div id="sem-limite" class="flex flex-wrap gap-2"></div>
                         </div>
                     </section>
+                    <!-- Alertas de poupança -->
+                    <section class="bg-white rounded-2xl p-5 shadow-sm border border-slate-200/80 no-print">
+                        <div class="flex items-start justify-between gap-4">
+                            <div>
+                                <h2 class="font-bold text-slate-800">
+                                    <i class="fa-brands fa-telegram text-sky-500 mr-1"></i> Alertas de poupança
+                                </h2>
+                                <p class="text-sm text-slate-600 leading-relaxed mt-1">
+                                    Receba no Telegram lembretes para guardar dinheiro, alinhados à sua meta.
+                                    Se você ainda não tem uma, eu ajudo a criar. No máximo um aviso por semana e nunca de madrugada.
+                                </p>
+                            </div>
+                            <button id="toggle-poup-alerta" role="switch" aria-checked="false" onclick="alternarAlertaPoup()"
+                                class="relative shrink-0 w-12 h-7 rounded-full bg-slate-300 transition" aria-label="Receber alertas de poupança no Telegram">
+                                <span id="toggle-poup-bolinha"
+                                    class="absolute top-0.5 left-0.5 w-6 h-6 bg-white rounded-full shadow transition-transform"></span>
+                            </button>
+                        </div>
+                        <p id="poup-alerta-status" class="text-xs mt-3 text-slate-500"></p>
+                    </section>
                 </div>
             </div>
         </main>
@@ -197,6 +223,7 @@
 
         const elMes = document.getElementById('filtro-mes');
         let mes = mesAtual();
+        let ultimoDados = null;
         elMes.value = mes;
         elMes.addEventListener('change', () => { mes = elMes.value || mesAtual(); document.getElementById('painel-ia').classList.add('hidden'); carregar(); });
 
@@ -225,6 +252,7 @@
         }
 
         function render(d) {
+            ultimoDados = d;
             // Poupança
             const p = d.poupanca;
             document.getElementById('poup-total').textContent = brl(p.total);
@@ -356,7 +384,92 @@
             setTimeout(() => el.classList.remove('ring-2', 'ring-emerald-400'), 2500);
         }
 
+        function exportarCSV() {
+            const d = ultimoDados;
+            if (!d) return aviso('Aguarde o carregamento para exportar.', true);
+            const linhas = [
+                ['Orçamentos Fincash - ' + mes.slice(5) + '/' + mes.slice(0, 4)], [],
+                ['Limites do mês'],
+                ['Categoria', 'Limite (R$)', 'Gasto (R$)', '% do limite', 'Situação'],
+            ];
+            d.orcamentos.forEach(o => linhas.push([csvSeguro(o.categoria), numCSV(o.limite), numCSV(o.gasto),
+                numCSV(o.percentual), CORES[o.status].rotulo]));
+            linhas.push(['Total', numCSV(d.totais.limite), numCSV(d.totais.gasto), numCSV(d.totais.percentual), '']);
+            if (d.sem_limite.length) {
+                linhas.push([], ['Gastos em categorias sem limite'], ['Categoria', 'Gasto (R$)']);
+                d.sem_limite.forEach(s => linhas.push([csvSeguro(s.categoria), numCSV(s.gasto)]));
+            }
+            const p = d.poupanca;
+            linhas.push([], ['Poupança'],
+                ['Total guardado (R$)', numCSV(p.total)],
+                ['Meta (R$)', p.meta ? numCSV(p.meta) : 'Sem meta definida'], [],
+                ['Últimas movimentações'], ['Data', 'Tipo', 'Descrição', 'Valor (R$)']);
+            p.movimentos.forEach(m => linhas.push([m.data_fmt, m.tipo === 'deposito' ? 'Guardado' : 'Retirado',
+                csvSeguro(m.descricao), numCSV(m.valor)]));
+            baixarCSV(linhas, 'fincash_orcamentos_' + mes + '.csv');
+        }
+
+        function exportarPDF() {
+            const titulo = document.title;
+            document.title = 'fincash-orcamentos-' + mes;
+            window.print();
+            document.title = titulo;
+        }
+
+        let alertaPoup = { ativo: false, vinculado: true };
+        function renderAlertaPoup() {
+            const t = document.getElementById('toggle-poup-alerta');
+            t.setAttribute('aria-checked', alertaPoup.ativo ? 'true' : 'false');
+            t.classList.toggle('bg-emerald-500', alertaPoup.ativo);
+            t.classList.toggle('bg-slate-300', !alertaPoup.ativo);
+            document.getElementById('toggle-poup-bolinha').style.transform = alertaPoup.ativo ? 'translateX(20px)' : 'translateX(0)';
+            const st = document.getElementById('poup-alerta-status');
+            if (!alertaPoup.vinculado) st.textContent = 'Para receber, vincule sua conta ao bot do Telegram (comando /login no bot).';
+            else st.textContent = alertaPoup.ativo ? '🔔 Alertas ligados: você receberá lembretes no Telegram.' : '🔕 Alertas desligados.';
+        }
+        async function carregarAlertaPoup() {
+            try {
+                const r = await fetch('/api/alertas-poupanca');
+                if (r.ok) alertaPoup = await r.json();
+            } catch (e) { }
+            renderAlertaPoup();
+        }
+        async function alternarAlertaPoup() {
+            const novo = !alertaPoup.ativo;
+            const st = document.getElementById('poup-alerta-status');
+            try {
+                const r = await fetch('/api/alertas-poupanca', {
+                    method: 'PUT', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ ativo: novo })
+                });
+                const d = await r.json().catch(() => ({}));
+                if (!r.ok) { st.textContent = '⚠️ ' + (d.erro || 'Não consegui alterar agora.'); return; }
+                alertaPoup.ativo = d.ativo;
+                renderAlertaPoup();
+                if (novo) st.textContent = '🔔 Alertas ligados: o primeiro lembrete chega no Telegram em até 30 minutos (entre 9h e 20h).';
+            } catch (e) {
+                st.textContent = '⚠️ Não consegui alterar agora. Tente de novo.';
+            }
+        }
+        carregarAlertaPoup();
+
         carregar().then(destacarPoupanca, destacarPoupanca);
+
+        // ---------- Exportação ----------
+        const numCSV = (v) => Number(v || 0).toFixed(2).replace('.', ',');
+        const csvSeguro = (v) => { const s = v == null ? '' : String(v); return /^[=+\-@]/.test(s) ? "'" + s : s; };
+        function baixarCSV(linhas, nomeArquivo) {
+            const cel = (c) => { const s = String(c ?? ''); return /[;"\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+            const texto = linhas.map(l => l.map(cel).join(';')).join('\r\n');
+            const blob = new Blob(['\ufeff' + texto], { type: 'text/csv;charset=utf-8' });
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = nomeArquivo;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+        }
     </script>
 </body>
 </html>
