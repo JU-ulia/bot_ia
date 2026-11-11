@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>fincash - Entrar ou Cadastrar</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%232563eb'/%3E%3Cpath d='M17 15v33h32' fill='none' stroke='white' stroke-width='5' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M24 38l9-10 7 6 11-14' fill='none' stroke='white' stroke-width='5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
@@ -218,85 +219,86 @@
             alertBox.textContent = msg;
         }
 
-      // 🟢 FUNÇÃO DE LOGIN ATUALIZADA
-async function handleLogin(e) {
-    e.preventDefault();
-    const identifier = document.getElementById('login-identifier').value.trim();
-    const password = document.getElementById('login-password').value;
+        // 🟢 FUNÇÃO DE LOGIN ATUALIZADA
+        async function handleLogin(e) {
+            e.preventDefault();
+            const identifier = document.getElementById('login-identifier').value.trim();
+            const password = document.getElementById('login-password').value;
 
-    // 1. Validação básica de campo vazio no login
-    if (!identifier || !password) {
-        showAlert('Preencha o telefone ou e-mail e a senha!', true);
-        return;
-    }
+            // 1. Validação básica de campo vazio no login
+            if (!identifier || !password) {
+                showAlert('Preencha o telefone ou e-mail e a senha!', true);
+                return;
+            }
 
-    try {
-        const res = await fetch('/api/login', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ identifier, password })
-        });
+            try {
+                const res = await fetch('/api/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ identifier, password })
+                });
 
-        const data = await res.json();
-        
-        if (res.ok) {
-            window.location.href = '/'; // Login correto -> Redireciona
-        } else {
-            // 🛑 Exibe mensagem quando a senha ou e-mail/usuário estiverem errados
-            showAlert(data.erro || 'Telefone, e-mail ou senha incorretos!', true);
+                const data = await res.json();
+                
+                if (res.ok) {
+                    window.location.href = '/'; // Login correto -> Redireciona
+                } else {
+                    // 🛑 Exibe mensagem quando a senha ou e-mail/usuário estiverem errados
+                    showAlert(data.erro || 'Telefone, e-mail ou senha incorretos!', true);
+                }
+            } catch (err) {
+                showAlert('Erro de conexão com o servidor', true);
+            }
         }
-    } catch (err) {
-        showAlert('Erro de conexão com o servidor', true);
-    }
-}
 
-// 🟢 FUNÇÃO DE CADASTRO ATUALIZADA
-async function handleRegister(e) {
-    e.preventDefault();
-    
-    const name = document.getElementById('reg-name').value.trim();
-    const email = document.getElementById('reg-email').value.trim();
-    const phone = document.getElementById('reg-phone').value.trim();
-    const password = document.getElementById('reg-password').value;
-    const confirmPassword = document.getElementById('reg-confirm-password').value;
+        // 🟢 FUNÇÃO DE CADASTRO ATUALIZADA
+        async function handleRegister(e) {
+            e.preventDefault();
+            
+            const name = document.getElementById('reg-name').value.trim();
+            const email = document.getElementById('reg-email').value.trim();
+            const phone = document.getElementById('reg-phone').value.trim();
+            const password = document.getElementById('reg-password').value;
+            const confirmPassword = document.getElementById('reg-confirm-password').value;
 
-    // 1. Validação de preenchimento dos campos
-    if (!name || !email || !phone || !password || !confirmPassword) {
-        showAlert('Por favor, preencha todos os campos do formulário!', true);
-        return;
-    }
+            // 1. Validação de preenchimento dos campos
+            if (!name || !email || !phone || !password || !confirmPassword) {
+                showAlert('Por favor, preencha todos os campos do formulário!', true);
+                return;
+            }
 
-    // 2. Validação de e-mail
-    if (!email.includes('@')) {
-        showAlert('O e-mail digitado é inválido! Falta o caractere "@".', true);
-        return;
-    }
+            // 2. Validação de e-mail
+            if (!email.includes('@')) {
+                showAlert('O e-mail digitado é inválido! Falta o caractere "@".', true);
+                return;
+            }
 
-    // 3. Validação de senhas divergentes
-    if (password !== confirmPassword) {
-        showAlert('As senhas não coincidem! Verifique e tente novamente.', true);
-        return;
-    }
+            // 3. Validação de senhas divergentes
+            if (password !== confirmPassword) {
+                showAlert('As senhas não coincidem! Verifique e tente novamente.', true);
+                return;
+            }
 
-    try {
-        const res = await fetch('/api/cadastrar', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name, email, phone, password })
-        });
+            try {
+                const res = await fetch('/api/cadastrar', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ name, email, phone, password })
+                });
 
-        const data = await res.json();
-        
-        if (res.ok) {
-            showAlert("Conta criada com sucesso! Faça login.");
-            setTimeout(() => switchTab('login'), 1500);
-        } else {
-            showAlert(data.erro || 'Erro ao realizar o cadastro.', true);
+                const data = await res.json();
+                
+                if (res.ok) {
+                    showAlert("Conta criada com sucesso! Faça login.");
+                    setTimeout(() => switchTab('login'), 1500);
+                } else {
+                    showAlert(data.erro || 'Erro ao realizar o cadastro.', true);
+                }
+            } catch (err) {
+                showAlert('Erro de conexão com o servidor', true);
+            }
         }
-    } catch (err) {
-        showAlert('Erro de conexão com o servidor', true);
-    }
-}
+        if (location.hash === '#cadastro') switchTab('register');
     </script>
 </body>
 </html>

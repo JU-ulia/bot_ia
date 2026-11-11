@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="pt-BR" class="scroll-smooth">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>fincash - Suas finanças, direto no Telegram</title>
+    <meta name="description" content="O fincash nasceu como projeto de TCC para tornar o controle financeiro simples: converse com o bot no Telegram e acompanhe tudo em um painel completo.">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = { theme: { extend: { colors: { 'brand-sidebar': '#0f172a', 'brand-active': '#1e293b' } } } }
+    </script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .glow { background:
+            radial-gradient(60rem 30rem at 15% -10%, rgba(37, 99, 235, .35), transparent 60%),
+            radial-gradient(40rem 25rem at 95% 10%, rgba(16, 185, 129, .22), transparent 60%); }
+        .reveal { opacity: 0; transform: translateY(18px); transition: opacity .6s ease, transform .6s ease; }
+        .reveal.in { opacity: 1; transform: none; }
+        @keyframes flutuar { 0%, 100% { transform: translateY(0) } 50% { transform: translateY(-8px) } }
+        .flutuar { animation: flutuar 6s ease-in-out infinite; }
+        @media (prefers-reduced-motion: reduce) {
+            .reveal { opacity: 1; transform: none; transition: none; }
+            .flutuar { animation: none; }
+            html { scroll-behavior: auto; }
+        }
+    </style>
+</head>
+<body class="bg-slate-900 text-slate-100 antialiased">
+
+    <!-- ============ NAVEGAÇÃO ============ -->
+    <header class="sticky top-0 z-40 backdrop-blur bg-slate-900/80 border-b border-slate-800">
+        <div class="max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
+            <a href="#topo" class="flex items-center gap-2.5">
+                <span class="bg-blue-600 p-2 rounded-lg text-white flex items-center justify-center shadow-lg"><i class="fa-solid fa-chart-line"></i></span>
+                <span class="text-xl font-extrabold tracking-tight text-white">fincash</span>
+            </a>
+            <nav class="hidden md:flex items-center gap-7 text-sm font-medium text-slate-300">
+                <a href="#historia" class="hover:text-white transition">Nossa história</a>
+                <a href="#recursos" class="hover:text-white transition">Recursos</a>
+                <a href="#como-funciona" class="hover:text-white transition">Como funciona</a>
+                <a href="#equipe" class="hover:text-white transition">Quem fez</a>
+            </nav>
+            <div class="flex items-center gap-2">
+                <a href="/login" class="hidden sm:inline-block px-4 py-2 text-sm font-semibold text-slate-200 hover:text-white transition">Entrar</a>
+                <a href="/login#cadastro" class="px-4 py-2 text-sm font-bold bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl shadow-lg shadow-emerald-600/20 transition">Criar conta</a>
+            </div>
+        </div>
+    </header>
+
+    <main id="topo">
+
+        <!-- ============ HERO ============ -->
+        <section class="glow">
+            <div class="max-w-6xl mx-auto px-4 pt-16 pb-20 md:pt-24 md:pb-28 grid lg:grid-cols-2 gap-14 items-center">
+                <div>
+                    <span class="inline-flex items-center gap-2 text-xs font-semibold px-3 py-1.5 rounded-full bg-blue-500/10 text-blue-300 border border-blue-500/30">
+                        <i class="fa-solid fa-graduation-cap"></i> Nascido como projeto de TCC
+                    </span>
+                    <h1 class="mt-5 text-4xl sm:text-5xl lg:text-6xl font-extrabold tracking-tight leading-[1.05] text-white">
+                        Suas finanças,<br>
+                        <span class="bg-gradient-to-r from-blue-400 to-emerald-400 bg-clip-text text-transparent">numa conversa.</span>
+                    </h1>
+                    <p class="mt-6 text-lg text-slate-300 max-w-xl leading-relaxed">
+                        Mande "gastei 25 no almoço" para o nosso bot no Telegram e pronto: o fincash registra, categoriza
+                        e transforma tudo em um painel claro, com alertas e previsões, para você saber para onde o dinheiro vai.
+                    </p>
+                    <div class="mt-8 flex flex-col sm:flex-row gap-3">
+                        <a href="/login#cadastro" class="inline-flex items-center justify-center gap-2 px-6 py-3.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl shadow-lg shadow-emerald-600/30 transition">
+                            <i class="fa-solid fa-rocket"></i> Começar gratuitamente
+                        </a>
+                        <a href="/login" class="inline-flex items-center justify-center gap-2 px-6 py-3.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white font-semibold rounded-xl transition">
+                            <i class="fa-solid fa-right-to-bracket"></i> Já tenho conta
+                        </a>
+                    </div>
+                    <p class="mt-4 text-xs text-slate-400"><i class="fa-brands fa-telegram text-sky-400 mr-1"></i> Funciona com o Telegram que você já usa. Sem instalar nada novo.</p>
+                </div>
+
+                <!-- Maquete: conversa + painel -->
+                <div class="relative max-w-md mx-auto w-full" aria-hidden="true">
+                    <div class="absolute -inset-4 bg-gradient-to-tr from-blue-600/20 to-emerald-500/20 blur-2xl rounded-3xl"></div>
+
+                    <div class="relative bg-slate-800 border border-slate-700 rounded-2xl shadow-2xl p-4">
+                        <div class="flex items-center justify-between mb-3">
+                            <span class="text-[11px] font-bold tracking-wider uppercase text-slate-400">Visão geral</span>
+                            <span class="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 font-semibold"><i class="fa-solid fa-robot mr-1"></i>Bot ativo</span>
+                        </div>
+                        <div class="grid grid-cols-3 gap-2">
+                            <div class="rounded-xl bg-slate-900/70 p-2.5 border border-slate-700/60">
+                                <span class="block text-[9px] uppercase font-semibold text-slate-400">Saldo atual</span>
+                                <span class="text-sm font-extrabold text-orange-300">R$ 1.240</span>
+                            </div>
+                            <div class="rounded-xl bg-slate-900/70 p-2.5 border border-slate-700/60">
+                                <span class="block text-[9px] uppercase font-semibold text-slate-400">Poupança</span>
+                                <span class="text-sm font-extrabold text-emerald-300">R$ 800</span>
+                            </div>
+                            <div class="rounded-xl bg-slate-900/70 p-2.5 border border-slate-700/60">
+                                <span class="block text-[9px] uppercase font-semibold text-slate-400">Invest.</span>
+                                <span class="text-sm font-extrabold text-blue-300">R$ 350</span>
+                            </div>
+                        </div>
+                        <div class="mt-3 rounded-xl bg-slate-900/70 border border-slate-700/60 p-3">
+                            <span class="text-[10px] font-semibold uppercase text-slate-400">Gastos por categoria</span>
+                            <div class="mt-2 flex items-end gap-2 h-20">
+                                <div class="flex-1 bg-blue-500 rounded-t" style="height:85%"></div>
+                                <div class="flex-1 bg-violet-500 rounded-t" style="height:55%"></div>
+                                <div class="flex-1 bg-emerald-500 rounded-t" style="height:38%"></div>
+                                <div class="flex-1 bg-amber-500 rounded-t" style="height:62%"></div>
+                                <div class="flex-1 bg-rose-500 rounded-t" style="height:25%"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="flutuar relative -mt-6 ml-6 sm:ml-12 -mr-2 bg-[#17212b] border border-slate-700 rounded-2xl shadow-2xl p-3 text-[13px]">
+                        <div class="flex items-center gap-2 pb-2 mb-2 border-b border-slate-700/70">
+                            <i class="fa-brands fa-telegram text-sky-400 text-lg"></i>
+                            <span class="font-semibold text-slate-200 text-xs">fincash bot</span>
+                        </div>
+                        <div class="flex justify-end"><span class="bg-sky-600 text-white px-3 py-1.5 rounded-2xl rounded-br-sm">gastei 25 no almoço</span></div>
+                        <div class="mt-2 flex"><span class="bg-slate-700 text-slate-100 px-3 py-1.5 rounded-2xl rounded-bl-sm">✅ Despesa registrada: R$ 25,00 em Alimentação</span></div>
+                        <div class="mt-2 flex justify-end"><span class="bg-sky-600 text-white px-3 py-1.5 rounded-2xl rounded-br-sm">guardar 200</span></div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============ NOSSA HISTÓRIA ============ -->
+        <section id="historia" class="bg-slate-950/40 border-y border-slate-800">
+            <div class="max-w-6xl mx-auto px-4 py-20 grid lg:grid-cols-5 gap-12">
+                <div class="lg:col-span-2 reveal">
+                    <p class="text-xs font-bold tracking-widest uppercase text-emerald-400">Nossa história</p>
+                    <h2 class="mt-3 text-3xl md:text-4xl font-extrabold tracking-tight text-white">De uma dor real a um projeto de conclusão de curso</h2>
+                </div>
+                <div class="lg:col-span-3 space-y-5 text-slate-300 leading-relaxed reveal">
+                    <p>
+                        O fincash começou como nosso <strong class="text-white">Trabalho de Conclusão de Curso (TCC)</strong>, mas a pergunta que
+                        o originou é bem cotidiana: <em>por que é tão difícil manter as finanças em dia?</em>
+                    </p>
+                    <p>
+                        Planilhas exigem disciplina, e aplicativos de controle financeiro costumam pedir muitos cliques e acabam
+                        esquecidos na segunda semana. Já o Telegram a gente abre dezenas de vezes por dia. Então pensamos:
+                        <strong class="text-white">e se registrar um gasto fosse tão fácil quanto mandar uma mensagem?</strong>
+                    </p>
+                    <p>
+                        Assim nasceu a ideia: um assistente que entende frases do dia a dia, usa inteligência artificial para categorizar
+                        cada lançamento e entrega o resultado em um painel web completo, com orçamentos, metas de poupança, previsão
+                        de gastos e informações sobre investimentos.
+                    </p>
+                    <div class="grid sm:grid-cols-3 gap-3 pt-2">
+                        <div class="rounded-xl border border-slate-800 bg-slate-900 p-4">
+                            <i class="fa-solid fa-lightbulb text-amber-400"></i>
+                            <p class="mt-2 text-sm font-bold text-white">A ideia</p>
+                            <p class="text-xs text-slate-400 mt-1">Controle financeiro sem fricção.</p>
+                        </div>
+                        <div class="rounded-xl border border-slate-800 bg-slate-900 p-4">
+                            <i class="fa-solid fa-code text-blue-400"></i>
+                            <p class="mt-2 text-sm font-bold text-white">A construção</p>
+                            <p class="text-xs text-slate-400 mt-1">Bot, site e banco de dados feitos por nós.</p>
+                        </div>
+                        <div class="rounded-xl border border-slate-800 bg-slate-900 p-4">
+                            <i class="fa-solid fa-seedling text-emerald-400"></i>
+                            <p class="mt-2 text-sm font-bold text-white">O objetivo</p>
+                            <p class="text-xs text-slate-400 mt-1">Educação financeira ao alcance de todos.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============ POR QUE ============ -->
+        <section class="max-w-6xl mx-auto px-4 py-20">
+            <div class="text-center max-w-2xl mx-auto reveal">
+                <p class="text-xs font-bold tracking-widest uppercase text-blue-400">Por que o fincash existe</p>
+                <h2 class="mt-3 text-3xl md:text-4xl font-extrabold tracking-tight text-white">Saber para onde o dinheiro vai muda tudo</h2>
+                <p class="mt-4 text-slate-400">Quem acompanha os próprios gastos decide melhor, evita sustos no fim do mês e consegue guardar com propósito.</p>
+            </div>
+            <div class="mt-12 grid md:grid-cols-3 gap-5">
+                <div class="reveal rounded-2xl border border-slate-800 bg-slate-800/50 p-6">
+                    <div class="w-11 h-11 rounded-xl bg-rose-500/15 text-rose-300 flex items-center justify-center text-lg"><i class="fa-solid fa-hourglass-half"></i></div>
+                    <h3 class="mt-4 font-bold text-white">Anotar dá preguiça</h3>
+                    <p class="mt-2 text-sm text-slate-400 leading-relaxed">Se registrar leva mais de cinco segundos, a gente desiste. Aqui, é só escrever como falaria com um amigo.</p>
+                </div>
+                <div class="reveal rounded-2xl border border-slate-800 bg-slate-800/50 p-6">
+                    <div class="w-11 h-11 rounded-xl bg-amber-500/15 text-amber-300 flex items-center justify-center text-lg"><i class="fa-solid fa-eye-slash"></i></div>
+                    <h3 class="mt-4 font-bold text-white">Faltam respostas</h3>
+                    <p class="mt-2 text-sm text-slate-400 leading-relaxed">Não basta listar gastos: é preciso ver categorias, tendências e quanto ainda dá para gastar sem estourar o mês.</p>
+                </div>
+                <div class="reveal rounded-2xl border border-slate-800 bg-slate-800/50 p-6">
+                    <div class="w-11 h-11 rounded-xl bg-emerald-500/15 text-emerald-300 flex items-center justify-center text-lg"><i class="fa-solid fa-graduation-cap"></i></div>
+                    <h3 class="mt-4 font-bold text-white">Educação financeira é rara</h3>
+                    <p class="mt-2 text-sm text-slate-400 leading-relaxed">Poupar, investir e entender o próprio perfil de risco deveria ser acessível. Por isso incluímos tudo isso no mesmo lugar.</p>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============ RECURSOS ============ -->
+        <section id="recursos" class="bg-slate-950/40 border-y border-slate-800">
+            <div class="max-w-6xl mx-auto px-4 py-20">
+                <div class="max-w-2xl reveal">
+                    <p class="text-xs font-bold tracking-widest uppercase text-emerald-400">Recursos</p>
+                    <h2 class="mt-3 text-3xl md:text-4xl font-extrabold tracking-tight text-white">Tudo o que você precisa, em um só lugar</h2>
+                </div>
+                <div class="mt-12 grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
+                    <article class="reveal rounded-2xl border border-slate-800 bg-slate-900 p-6 hover:border-sky-500/50 transition">
+                        <div class="w-11 h-11 rounded-xl bg-sky-500/15 text-sky-300 flex items-center justify-center text-lg"><i class="fa-brands fa-telegram"></i></div>
+                        <h3 class="mt-4 font-bold text-white">Bot no Telegram com IA</h3>
+                        <p class="mt-2 text-sm text-slate-400 leading-relaxed">Registre gastos e rendas em linguagem natural. A IA entende o valor, a categoria e a descrição.</p>
+                    </article>
+                    <article class="reveal rounded-2xl border border-slate-800 bg-slate-900 p-6 hover:border-blue-500/50 transition">
+                        <div class="w-11 h-11 rounded-xl bg-blue-500/15 text-blue-300 flex items-center justify-center text-lg"><i class="fa-solid fa-square-poll-vertical"></i></div>
+                        <h3 class="mt-4 font-bold text-white">Painel completo</h3>
+                        <p class="mt-2 text-sm text-slate-400 leading-relaxed">Saldo atual, gráficos por categoria, evolução do saldo e extrato de transações com filtros.</p>
+                    </article>
+                    <article class="reveal rounded-2xl border border-slate-800 bg-slate-900 p-6 hover:border-amber-500/50 transition">
+                        <div class="w-11 h-11 rounded-xl bg-amber-500/15 text-amber-300 flex items-center justify-center text-lg"><i class="fa-solid fa-bell"></i></div>
+                        <h3 class="mt-4 font-bold text-white">Alertas de teto de gastos</h3>
+                        <p class="mt-2 text-sm text-slate-400 leading-relaxed">Defina limites por categoria e receba aviso por Telegram e e-mail quando estiver perto de estourar.</p>
+                    </article>
+                    <article class="reveal rounded-2xl border border-slate-800 bg-slate-900 p-6 hover:border-violet-500/50 transition">
+                        <div class="w-11 h-11 rounded-xl bg-violet-500/15 text-violet-300 flex items-center justify-center text-lg"><i class="fa-solid fa-wand-magic-sparkles"></i></div>
+                        <h3 class="mt-4 font-bold text-white">Previsão de gastos</h3>
+                        <p class="mt-2 text-sm text-slate-400 leading-relaxed">Uma estimativa do próximo mês a partir do seu histórico, para você se planejar com antecedência.</p>
+                    </article>
+                    <article class="reveal rounded-2xl border border-slate-800 bg-slate-900 p-6 hover:border-emerald-500/50 transition">
+                        <div class="w-11 h-11 rounded-xl bg-emerald-500/15 text-emerald-300 flex items-center justify-center text-lg"><i class="fa-solid fa-piggy-bank"></i></div>
+                        <h3 class="mt-4 font-bold text-white">Poupança com meta</h3>
+                        <p class="mt-2 text-sm text-slate-400 leading-relaxed">Guarde e retire dinheiro, acompanhe o progresso até a meta e receba lembretes para continuar.</p>
+                    </article>
+                    <article class="reveal rounded-2xl border border-slate-800 bg-slate-900 p-6 hover:border-teal-500/50 transition">
+                        <div class="w-11 h-11 rounded-xl bg-teal-500/15 text-teal-300 flex items-center justify-center text-lg"><i class="fa-solid fa-arrow-trend-up"></i></div>
+                        <h3 class="mt-4 font-bold text-white">Investimentos para iniciantes</h3>
+                        <p class="mt-2 text-sm text-slate-400 leading-relaxed">Quiz de perfil de investidor, notícias do mercado e indicadores, explicados de forma simples.</p>
+                    </article>
+                </div>
+                <p class="mt-8 text-sm text-slate-400 reveal"><i class="fa-solid fa-file-export text-slate-500 mr-1.5"></i> Quer levar seus dados? Exporte relatórios em <strong class="text-slate-200">CSV/Excel</strong> ou <strong class="text-slate-200">PDF</strong> quando quiser.</p>
+            </div>
+        </section>
+
+        <!-- ============ COMO FUNCIONA ============ -->
+        <section id="como-funciona" class="max-w-6xl mx-auto px-4 py-20">
+            <div class="text-center max-w-2xl mx-auto reveal">
+                <p class="text-xs font-bold tracking-widest uppercase text-blue-400">Como funciona</p>
+                <h2 class="mt-3 text-3xl md:text-4xl font-extrabold tracking-tight text-white">Em três passos você começa</h2>
+            </div>
+            <ol class="mt-12 grid md:grid-cols-3 gap-6">
+                <li class="reveal relative rounded-2xl border border-slate-800 bg-slate-800/50 p-6">
+                    <span class="absolute -top-4 left-6 w-9 h-9 rounded-full bg-blue-600 text-white font-extrabold flex items-center justify-center shadow-lg">1</span>
+                    <h3 class="mt-3 font-bold text-white">Crie sua conta</h3>
+                    <p class="mt-2 text-sm text-slate-400 leading-relaxed">Cadastre-se com nome, e-mail e telefone. Leva menos de um minuto.</p>
+                </li>
+                <li class="reveal relative rounded-2xl border border-slate-800 bg-slate-800/50 p-6">
+                    <span class="absolute -top-4 left-6 w-9 h-9 rounded-full bg-blue-600 text-white font-extrabold flex items-center justify-center shadow-lg">2</span>
+                    <h3 class="mt-3 font-bold text-white">Conecte o Telegram</h3>
+                    <p class="mt-2 text-sm text-slate-400 leading-relaxed">Envie <code class="px-1.5 py-0.5 rounded bg-slate-900 text-emerald-300 text-xs">/login</code> para o bot e vincule sua conta.</p>
+                </li>
+                <li class="reveal relative rounded-2xl border border-slate-800 bg-slate-800/50 p-6">
+                    <span class="absolute -top-4 left-6 w-9 h-9 rounded-full bg-blue-600 text-white font-extrabold flex items-center justify-center shadow-lg">3</span>
+                    <h3 class="mt-3 font-bold text-white">Converse e acompanhe</h3>
+                    <p class="mt-2 text-sm text-slate-400 leading-relaxed">Mande seus gastos como mensagens e veja tudo organizado no painel, em tempo real.</p>
+                </li>
+            </ol>
+        </section>
+
+        <!-- ============ EQUIPE / TECNOLOGIA ============ -->
+        <section id="equipe" class="bg-slate-950/40 border-y border-slate-800">
+            <div class="max-w-6xl mx-auto px-4 py-20 grid lg:grid-cols-2 gap-12 items-center">
+                <div class="reveal">
+                    <p class="text-xs font-bold tracking-widest uppercase text-emerald-400">Quem fez</p>
+                    <h2 class="mt-3 text-3xl md:text-4xl font-extrabold tracking-tight text-white">Feito por estudantes, com cuidado</h2>
+                    <p class="mt-5 text-slate-300 leading-relaxed">
+                        O fincash é desenvolvido por estudantes de tecnologia como projeto de conclusão de curso. Cada tela, cada
+                        comando do bot e cada alerta foram pensados para serem úteis no dia a dia, e o projeto segue evoluindo.
+                    </p>
+                    <div class="mt-8 grid sm:grid-cols-2 gap-4">
+                        <a href="https://www.linkedin.com/in/biancasantosalves/" target="_blank" rel="noopener noreferrer"
+                           class="group flex items-center gap-4 rounded-2xl border border-slate-800 bg-slate-900 p-4 hover:border-blue-500/60 transition">
+                            <img src="{{ url_for('static', filename='img/bianca.jpg') }}" alt="Foto de Bianca Alves" loading="lazy"
+                                 class="w-16 h-16 rounded-full object-cover border-2 border-blue-500 shadow-lg shrink-0">
+                            <div class="min-w-0">
+                                <p class="font-bold text-white truncate">Bianca Alves</p>
+                                <p class="text-xs text-slate-400">Desenvolvedora</p>
+                                <span class="mt-1 inline-flex items-center gap-1.5 text-xs font-semibold text-blue-400 group-hover:text-blue-300">
+                                    <i class="fa-brands fa-linkedin text-sm"></i> LinkedIn
+                                </span>
+                            </div>
+                        </a>
+                        <a href="https://www.linkedin.com/in/julia-garrido-4a0265217/" target="_blank" rel="noopener noreferrer"
+                           class="group flex items-center gap-4 rounded-2xl border border-slate-800 bg-slate-900 p-4 hover:border-blue-500/60 transition">
+                            <img src="{{ url_for('static', filename='img/julia.jpg') }}" alt="Foto de Julia Garrido" loading="lazy"
+                                 class="w-16 h-16 rounded-full object-cover border-2 border-emerald-500 shadow-lg shrink-0">
+                            <div class="min-w-0">
+                                <p class="font-bold text-white truncate">Julia Garrido</p>
+                                <p class="text-xs text-slate-400">Desenvolvedora</p>
+                                <span class="mt-1 inline-flex items-center gap-1.5 text-xs font-semibold text-blue-400 group-hover:text-blue-300">
+                                    <i class="fa-brands fa-linkedin text-sm"></i> LinkedIn
+                                </span>
+                            </div>
+                        </a>
+                    </div>
+                    <a href="https://github.com/JU-ulia/bot_ia" target="_blank" rel="noopener noreferrer"
+                       class="mt-6 inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-sm font-semibold text-white transition">
+                        <i class="fa-brands fa-github text-lg"></i> Ver o código no GitHub
+                    </a>
+                </div>
+                <div class="reveal">
+                    <p class="text-sm font-semibold text-slate-400 mb-3">Tecnologias por trás do projeto</p>
+                    <div class="flex flex-wrap gap-2.5">
+                        <span class="px-3.5 py-2 rounded-xl bg-slate-900 border border-slate-800 text-sm text-slate-200"><i class="fa-brands fa-python text-yellow-300 mr-1.5"></i>Python</span>
+                        <span class="px-3.5 py-2 rounded-xl bg-slate-900 border border-slate-800 text-sm text-slate-200"><i class="fa-solid fa-flask text-slate-300 mr-1.5"></i>Flask</span>
+                        <span class="px-3.5 py-2 rounded-xl bg-slate-900 border border-slate-800 text-sm text-slate-200"><i class="fa-brands fa-telegram text-sky-400 mr-1.5"></i>Telegram Bot API</span>
+                        <span class="px-3.5 py-2 rounded-xl bg-slate-900 border border-slate-800 text-sm text-slate-200"><i class="fa-solid fa-brain text-violet-300 mr-1.5"></i>IA (Groq)</span>
+                        <span class="px-3.5 py-2 rounded-xl bg-slate-900 border border-slate-800 text-sm text-slate-200"><i class="fa-solid fa-database text-blue-300 mr-1.5"></i>PostgreSQL</span>
+                        <span class="px-3.5 py-2 rounded-xl bg-slate-900 border border-slate-800 text-sm text-slate-200"><i class="fa-solid fa-wind text-cyan-300 mr-1.5"></i>Tailwind CSS</span>
+                        <span class="px-3.5 py-2 rounded-xl bg-slate-900 border border-slate-800 text-sm text-slate-200"><i class="fa-solid fa-chart-column text-emerald-300 mr-1.5"></i>Chart.js</span>
+                    </div>
+                    <div class="mt-6 rounded-2xl border border-slate-800 bg-slate-900 p-5 text-sm text-slate-400 leading-relaxed">
+                        <i class="fa-solid fa-shield-halved text-emerald-400 mr-1.5"></i>
+                        Suas senhas são protegidas e a recuperação de acesso é feita por link enviado ao seu e-mail.
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ============ CTA FINAL ============ -->
+        <section class="glow">
+            <div class="max-w-3xl mx-auto px-4 py-24 text-center reveal">
+                <h2 class="text-3xl md:text-5xl font-extrabold tracking-tight text-white">Pronto para organizar suas finanças?</h2>
+                <p class="mt-5 text-lg text-slate-300">Crie sua conta, conecte o Telegram e registre seu primeiro gasto hoje.</p>
+                <div class="mt-8 flex flex-col sm:flex-row gap-3 justify-center">
+                    <a href="/login#cadastro" class="inline-flex items-center justify-center gap-2 px-7 py-3.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl shadow-lg shadow-emerald-600/30 transition">
+                        <i class="fa-solid fa-user-plus"></i> Criar minha conta
+                    </a>
+                    <a href="/login" class="inline-flex items-center justify-center gap-2 px-7 py-3.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white font-semibold rounded-xl transition">
+                        <i class="fa-solid fa-right-to-bracket"></i> Entrar
+                    </a>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- ============ RODAPÉ ============ -->
+    <footer class="border-t border-slate-800">
+        <div class="max-w-6xl mx-auto px-4 py-8 flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-slate-400">
+            <div class="flex items-center gap-2">
+                <span class="bg-blue-600 p-1.5 rounded-md text-white text-xs flex items-center justify-center"><i class="fa-solid fa-chart-line"></i></span>
+                <span class="font-bold text-slate-200">fincash</span>
+                <span>· Projeto de TCC</span>
+            </div>
+            <div class="flex items-center gap-5">
+                <a href="#historia" class="hover:text-white transition">Nossa história</a>
+                <a href="/login" class="hover:text-white transition">Entrar</a>
+                <a href="https://github.com/JU-ulia/bot_ia" target="_blank" rel="noopener noreferrer" class="hover:text-white transition" aria-label="GitHub"><i class="fa-brands fa-github text-lg"></i></a>
+            </div>
+        </div>
+        <p class="text-center text-[11px] text-slate-500 pb-6 px-4">O fincash tem caráter informativo e educativo. Nada aqui é recomendação de investimento.</p>
+    </footer>
+
+    <script>
+        // Aparece suavemente ao rolar
+        (function () {
+            const itens = document.querySelectorAll('.reveal');
+            if (!('IntersectionObserver' in window)) { itens.forEach(e => e.classList.add('in')); return; }
+            const obs = new IntersectionObserver((lista) => {
+                lista.forEach(l => { if (l.isIntersecting) { l.target.classList.add('in'); obs.unobserve(l.target); } });
+            }, { threshold: 0.12 });
+            itens.forEach(e => obs.observe(e));
+        })();
+    </script>
+</body>
+</html>

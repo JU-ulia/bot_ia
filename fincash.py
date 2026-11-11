@@ -498,8 +498,12 @@ def deletar_transacao_por_id(telegram_id: str, id_transacao: int) -> bool:
 @app_web.route('/')
 def index():
     if 'telegram_id' not in session:
-        return redirect(url_for('login_page'))
+        return render_template('landing.html')   # antes: redirect para o login
     return render_template('main.html')
+
+@app_web.route('/sobre')
+def sobre_page():
+    return render_template('landing.html')       # acessível mesmo logado
 
 # 2. Rota Login Page
 # Página de Transações (histórico de entradas e saídas)
