@@ -5,6 +5,7 @@ import psycopg2
 import asyncio
 from groq import Groq
 from dotenv import load_dotenv
+from telegram_webhook import TelegramWebhook
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
@@ -40,6 +41,7 @@ from urllib.parse import urlparse
 import investimentos
 from html import escape as escapar_html
 from utils import fmt_brl, limpar_resposta_ia, limpar_telefone, normalizar
+
 
 # Carrega as variáveis de ambiente (.env)
 load_dotenv()
@@ -4214,12 +4216,139 @@ investimentos.configurar(
     usuario_esta_vinculado=usuario_esta_vinculado
 )
 investimentos.registrar_web(app_web)   # rotas web podem ser registradas já aqui
+
+#
+# INICIALIZAÇÃO DA APLICAÇÃO (BOT + WEB) - NOVO
+#
+
+def registrar_comandos_telegram(app):
+    """Registra os comandos e mensagens do bot FinCash."""
+
+    # Investimentos
+    investimentos.registrar_telegram(app)
+
+    # Menu principal
+    app.add_handler(CommandHandler("menu", comando_menu))
+    app.add_handler(CommandHandler("ajuda", comando_menu))
+    app.add_handler(CommandHandler("help", comando_menu))
+    app.add_handler(
+        CallbackQueryHandler(
+            tratar_callback_menu,
+            pattern=r"^menu:"
+        )
+    )
+
+    # Usuários e alertas
+    app.add_handler(CommandHandler("start", processar_mensagem))
+    app.add_handler(CommandHandler("alertapoupanca", comando_alerta_poupanca))
+    app.add_handler(CommandHandler("login", processar_mensagem))
+    app.add_handler(CommandHandler("alertas", comando_alertas))
+
+    # Finanças
+    app.add_handler(CommandHandler("resumo", comando_resumo))
+    app.add_handler(CommandHandler("deletar", comando_deletar))
+    app.add_handler(CommandHandler("apagar", comando_deletar))
+    app.add_handler(CommandHandler("excluir", comando_deletar))
+    app.add_handler(CommandHandler("categorias", comando_categorias))
+    app.add_handler(CommandHandler("novacategoria", comando_nova_categoria))
+    app.add_handler(CommandHandler("excluircategoria", comando_excluir_categoria))
+    app.add_handler(CommandHandler("guardar", comando_guardar))
+    app.add_handler(CommandHandler("sacar", comando_sacar))
+    app.add_handler(CommandHandler("poupanca", comando_poupanca))
+    app.add_handler(CommandHandler("previsao", comando_previsao))
+    app.add_handler(CommandHandler("meta", comando_meta))
+
+    # Mensagens e contatos
+    app.add_handler(
+        MessageHandler(
+            (filters.TEXT | filters.CONTACT) & ~filters.COMMAND,
+            processar_mensagem
+        )
+    )
+
+    # Alertas programados
+    if app.job_queue:
+        app.job_queue.run_repeating(
+            _job_alertas_poupanca,
+            interval=POUPANCA_INTERVALO_JOB,
+            first=120,
+            name="alertas_poupanca"
+        )
+
+
+# ==========================================
+# WEBHOOK DO TELEGRAM
+# ==========================================
+
+telegram_webhook = None
+
+
+def iniciar_telegram_no_render():
+    global telegram_webhook
+
+    if telegram_webhook is not None:
+        return
+
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+
+    if not token:
+        raise RuntimeError("TELEGRAM_BOT_TOKEN não configurado")
+
+    aplicacao = ApplicationBuilder().token(token).build()
+
+    registrar_comandos_telegram(aplicacao)
+
+    webhook = TelegramWebhook(aplicacao)
+    webhook.iniciar()
+
+    telegram_webhook = webhook
+
+    print("✅ Telegram inicializado no Render")
+
+@app_web.route("/telegram/webhook", methods=["POST"])
+def receber_webhook_telegram():
+    global telegram_webhook
+
+    # Verifica a chave de segurança do Telegram
+    segredo = os.getenv("TELEGRAM_WEBHOOK_SECRET")
+
+    if not segredo:
+        return jsonify({"erro": "Webhook não configurado"}), 503
+
+    segredo_recebido = request.headers.get(
+        "X-Telegram-Bot-Api-Secret-Token", ""
+    )
+
+    if not secrets.compare_digest(
+        segredo_recebido, segredo
+    ):
+        return jsonify({"erro": "Não autorizado"}), 403
+
+    if telegram_webhook is None:
+        return jsonify({"erro": "Bot não inicializado"}), 503
+
+    dados = request.get_json(silent=True)
+
+    if not isinstance(dados, dict):
+        return jsonify({"erro": "JSON inválido"}), 400
+
+    try:
+        telegram_webhook.processar(dados)
+        return jsonify({"ok": True}), 200
+
+    except Exception:
+        app_web.logger.exception(
+            "Erro ao processar mensagem do Telegram"
+        )
+        return jsonify({"erro": "Erro interno"}), 500
+
+
 # ==========================================
 # INICIALIZAÇÃO DA APLICAÇÃO (BOT + WEB)
 # ==========================================
 
 if __name__ == "__main__":
-    investimentos.preparar_banco()   # <- aqui, depois de criar_tabelas()
+    investimentos.preparar_banco()   
 
     thread_web = threading.Thread(target=rodar_flask)
     thread_web.daemon = True
@@ -4233,39 +4362,11 @@ if __name__ == "__main__":
     if not token_telegram:
         print("❌ ERRO: TELEGRAM_BOT_TOKEN não configurado no arquivo .env")
     else:
+      
         app = ApplicationBuilder().token(token_telegram).build()
 
-        # Investimentos primeiro, para o /investir e os botões terem prioridade
-        investimentos.registrar_telegram(app)   # <- registra no MESMO app do polling
-
-        # Menu principal: /menu (e apelidos), botões "menu:*" e /start
-        app.add_handler(CommandHandler("menu", comando_menu))
-        app.add_handler(CommandHandler("ajuda", comando_menu))
-        app.add_handler(CommandHandler("help", comando_menu))
-        app.add_handler(CallbackQueryHandler(tratar_callback_menu, pattern=r"^menu:"))
-        app.add_handler(CommandHandler("start", processar_mensagem))   # ativa a conta ou dá as boas-vindas
-        app.add_handler(CommandHandler("alertapoupanca", comando_alerta_poupanca))
-        if app.job_queue:
-            app.job_queue.run_repeating(_job_alertas_poupanca, interval=POUPANCA_INTERVALO_JOB, first=120, name="alertas_poupanca")
-        app.add_handler(CommandHandler("resumo", comando_resumo))
-        app.add_handler(CommandHandler("deletar", comando_deletar))
-        app.add_handler(CommandHandler("apagar", comando_deletar))
-        app.add_handler(CommandHandler("excluir", comando_deletar))
-        app.add_handler(CommandHandler("categorias", comando_categorias))
-        app.add_handler(CommandHandler("novacategoria", comando_nova_categoria))
-        app.add_handler(CommandHandler("excluircategoria", comando_excluir_categoria))
-        app.add_handler(CommandHandler("guardar", comando_guardar))
-        app.add_handler(CommandHandler("sacar", comando_sacar))
-        app.add_handler(CommandHandler("poupanca", comando_poupanca))
-        app.add_handler(CommandHandler("login", processar_mensagem))
-        app.add_handler(CommandHandler("alertas", comando_alertas))
-        app.add_handler(CommandHandler("previsao", comando_previsao))
-        app.add_handler(CommandHandler("meta", comando_meta))
-
-        # Registra tratador de texto E compartilhamento de contatos
-        app.add_handler(
-            MessageHandler((filters.TEXT | filters.CONTACT) & ~filters.COMMAND, processar_mensagem)
-        )
+        # Registra todos os comandos do FinCash
+        registrar_comandos_telegram(app)
 
         print("🚀 Bot rodando com sucesso! Aguardando mensagens...")
         app.run_polling()
