@@ -1,3 +1,4 @@
+
 # Configuração do Gunicorn para o FinCash
 
 workers = 1
