@@ -445,7 +445,17 @@ def criar_tabelas():
             ultimo_envio TIMESTAMP
         );
         """)
-
+        # FKs com cascata: trocar o telegram_id do usuário leva transactions e categories junto
+        cursor.execute("ALTER TABLE transactions DROP CONSTRAINT IF EXISTS transactions_telegram_id_fkey;")
+        cursor.execute("""
+            ALTER TABLE transactions ADD CONSTRAINT transactions_telegram_id_fkey
+            FOREIGN KEY (telegram_id) REFERENCES users(telegram_id) ON UPDATE CASCADE;
+        """)
+        cursor.execute("ALTER TABLE categories DROP CONSTRAINT IF EXISTS categories_telegram_id_fkey;")
+        cursor.execute("""
+            ALTER TABLE categories ADD CONSTRAINT categories_telegram_id_fkey
+            FOREIGN KEY (telegram_id) REFERENCES users(telegram_id) ON UPDATE CASCADE;
+        """)
         conexao.commit()
         print("Tabelas e índices sincronizados com sucesso!")
 
@@ -2428,6 +2438,24 @@ def salvar_transacao(telegram_id: str, dados: dict) -> int:
     finally:
         conexao.close()
 
+# tabelas sem FK que também guardam telegram_id
+TABELAS_POR_TELEGRAM = ["transactions_backup", "savings_movements", "budgets", "savings_goals",
+                        "investments", "alert_settings", "alerts_sent", "poupanca_alertas"]
+
+def vincular_telegram(cursor, user_id, novo_tid):
+    """Troca o Telegram da conta e leva os dados junto. Levanta ValueError se o ID já é de outra conta."""
+    cursor.execute("SELECT telegram_id FROM users WHERE id = %s FOR UPDATE;", (user_id,))
+    antigo = cursor.fetchone()[0]
+    if antigo == novo_tid:
+        return
+    cursor.execute("SELECT 1 FROM users WHERE telegram_id = %s AND id <> %s;", (novo_tid, user_id))
+    if cursor.fetchone():
+        raise ValueError("Este Telegram já está vinculado a outra conta.")
+    cursor.execute("UPDATE users SET telegram_id = %s WHERE id = %s;", (novo_tid, user_id))
+    if antigo:
+        for t in TABELAS_POR_TELEGRAM:
+            cursor.execute(f"UPDATE {t} SET telegram_id = %s WHERE telegram_id = %s;", (novo_tid, antigo))
+            
 def autenticar_e_vincular_telegram(identifier: str, password: str, novo_telegram_id: str) -> tuple[bool, str]:
     """Valida credenciais e vincula o novo Telegram ID."""
     conexao = None
@@ -2436,15 +2464,17 @@ def autenticar_e_vincular_telegram(identifier: str, password: str, novo_telegram
         conexao = obter_conexao()
         cursor = conexao.cursor()
 
-        # Busca por e-mail, telefone ou telegram_id
-        cursor.execute("""
-            SELECT id, nome, email, senha, telegram_id 
-            FROM users 
-            WHERE LOWER(email) = LOWER(%s) 
-               OR telefone = %s 
-               OR (telegram_id IS NOT NULL AND telegram_id = %s);
-        """, (identifier, identifier, identifier))
+        tel = limpar_telefone(identifier)
+        print(f"DEBUG login: identifier={identifier!r} tel={tel!r}")
         
+        cursor.execute("""
+            SELECT id, nome, email, senha, telegram_id
+            FROM users
+            WHERE LOWER(email) = LOWER(%s)
+               OR telefone = %s
+               OR (telegram_id IS NOT NULL AND telegram_id = %s);
+        """, (identifier, tel, identifier))
+
         user = cursor.fetchone()
 
         if not user:
@@ -2455,20 +2485,21 @@ def autenticar_e_vincular_telegram(identifier: str, password: str, novo_telegram
         if not db_senha_hash or not check_password_hash(db_senha_hash, password):
             return False, "Senha incorreta"
 
-        if antigo_telegram_id == novo_telegram_id:
-            return True, db_nome
+        try:
+            vincular_telegram(cursor, user_id, novo_telegram_id)
+            conexao.commit()
+        except ValueError as e:
+            conexao.rollback()
+            return False, str(e)
 
-        # Atualiza no banco de dados
-        cursor.execute("UPDATE users SET telegram_id = %s WHERE id = %s;", (novo_telegram_id, user_id))
-        conexao.commit()
-        
         return True, db_nome
 
     except Exception as e:
         if conexao:
             conexao.rollback()
         print(f"❌ Erro no banco durante o login: {e}")
-        return False, str(e)
+        traceback.print_exc()
+        return False, "Erro ao vincular. Tente novamente."
     finally:
         if cursor:
             cursor.close()
@@ -2527,7 +2558,7 @@ async def processar_mensagem(update: Update, context: ContextTypes.DEFAULT_TYPE)
             partes = texto_usuario.split(maxsplit=2)
             if len(partes) < 3:
                 await update.message.reply_text(
-                    "⚠️ **Formato incorreto!**\nUse: `/login <email_ou_telefone> <senha>`", 
+                    "⚠️ **Formato incorreto!**\nUse: `/login email_ou_telefone senha`", 
                     parse_mode="Markdown"
                 )
                 return
@@ -2560,38 +2591,40 @@ async def processar_mensagem(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # 2. PROCESSA COMPARTILHAMENTO DE CONTATO (TELEFONE)
     # =============================================================
     if update.message.contact:
-        num_telefone = update.message.contact.phone_number.replace("+", "").replace(" ", "").replace("-", "").strip()
-        
+        contato = update.message.contact
+        if contato.user_id != update.effective_user.id:
+            await update.message.reply_text("⚠️ Compartilhe o seu próprio contato, pelo botão.")
+            return
+        digitos = re.sub(r'\D', '', contato.phone_number)[-11:]
         conexao = obter_conexao()
-        cursor = conexao.cursor()
-        
-        cursor.execute("""
-            SELECT id, nome FROM users 
-            WHERE telefone = %s OR telefone = %s OR %s LIKE '%%' || telefone;
-        """, (num_telefone, num_telefone[-11:], num_telefone))
-        
-        user = cursor.fetchone()
-        
-        if user:
-            user_db_id, nome = user
-            cursor.execute("UPDATE users SET telegram_id = %s WHERE id = %s;", (user_id, user_db_id))
+        try:
+            with conexao.cursor() as cursor:
+                cursor.execute("""
+                    SELECT id, nome FROM users
+                    WHERE RIGHT(REGEXP_REPLACE(telefone, '\\D', '', 'g'), 11) = %s;
+                """, (digitos,))
+                user = cursor.fetchone()
+                if not user:
+                    await update.message.reply_text(
+                        "Não encontrei uma conta com esse telefone. Se o número cadastrado for diferente do "
+                        "do seu Telegram, use: /login <email_ou_telefone> <senha>")
+                    return
+                vincular_telegram(cursor, user[0], user_id)
             conexao.commit()
-            cursor.close()
-            conexao.close()
-            
-            primeiro_nome = nome.split()[0]
-            await update.message.reply_text(
-                f"Olá, **{primeiro_nome}**! Seja bem-vindo ao **Fincash**! 🎉",
-                parse_mode="Markdown"
-            )
+        except ValueError as e:
+            conexao.rollback()
+            await update.message.reply_text(f"⚠️ {e}")
             return
-        else:
-            cursor.close()
-            conexao.close()
-            await update.message.reply_text(
-                "Parece que não conseguimos acessar sua conta, tente novamente ou entre em contato com o SAC."
-            )
+        except Exception:
+            conexao.rollback()
+            traceback.print_exc()
+            await update.message.reply_text("❌ Erro ao ativar. Tente novamente.")
             return
+        finally:
+            conexao.close()
+        await update.message.reply_text(
+            f"Olá, **{user[1].split()[0]}**! Seja bem-vindo ao **Fincash**! 🎉", parse_mode="Markdown")
+        return
 
     # =============================================================
     # 3. VERIFICA SE O USUÁRIO JÁ ESTÁ VINCULADO NO BANCO
