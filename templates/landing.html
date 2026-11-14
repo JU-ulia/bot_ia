@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>fincash - Suas finanças, direto no Telegram</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%232563eb'/%3E%3Cpath d='M17 15v33h32' fill='none' stroke='white' stroke-width='5' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cpath d='M24 38l9-10 7 6 11-14' fill='none' stroke='white' stroke-width='5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
     <meta name="description" content="O fincash nasceu como projeto de TCC para tornar o controle financeiro simples: converse com o bot no Telegram e acompanhe tudo em um painel completo.">
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
@@ -40,6 +41,7 @@
                 <a href="#historia" class="hover:text-white transition">Nossa história</a>
                 <a href="#recursos" class="hover:text-white transition">Recursos</a>
                 <a href="#como-funciona" class="hover:text-white transition">Como funciona</a>
+                <a href="#tutorial" class="hover:text-white transition">Tutorial</a>
                 <a href="#equipe" class="hover:text-white transition">Quem fez</a>
             </nav>
             <div class="flex items-center gap-2">
@@ -66,15 +68,18 @@
                         Mande "gastei 25 no almoço" para o nosso bot no Telegram e pronto: o fincash registra, categoriza
                         e transforma tudo em um painel claro, com alertas e previsões, para você saber para onde o dinheiro vai.
                     </p>
-                    <div class="mt-8 flex flex-col sm:flex-row gap-3">
-                        <a href="/login#cadastro" class="inline-flex items-center justify-center gap-2 px-6 py-3.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl shadow-lg shadow-emerald-600/30 transition">
+                    <div class="mt-8 flex flex-col sm:flex-row sm:flex-wrap gap-3">
+                        <a href="/login#cadastro" class="inline-flex items-center justify-center gap-2 whitespace-nowrap px-6 py-3.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl shadow-lg shadow-emerald-600/30 transition">
                             <i class="fa-solid fa-rocket"></i> Começar gratuitamente
                         </a>
-                        <a href="/login" class="inline-flex items-center justify-center gap-2 px-6 py-3.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white font-semibold rounded-xl transition">
+                        <a href="/login" class="inline-flex items-center justify-center gap-2 whitespace-nowrap px-6 py-3.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white font-semibold rounded-xl transition">
                             <i class="fa-solid fa-right-to-bracket"></i> Já tenho conta
                         </a>
+                        <a href="https://t.me/telefincashBot" target="_blank" rel="noopener noreferrer" class="inline-flex items-center justify-center gap-2 whitespace-nowrap px-6 py-3.5 bg-sky-600 hover:bg-sky-500 text-white font-semibold rounded-xl shadow-lg shadow-sky-600/30 transition">
+                            <i class="fa-brands fa-telegram"></i> Abrir no Telegram
+                        </a>
                     </div>
-                    <p class="mt-4 text-xs text-slate-400"><i class="fa-brands fa-telegram text-sky-400 mr-1"></i> Funciona com o Telegram que você já usa. Sem instalar nada novo.</p>
+                    <p class="mt-4 text-xs text-slate-400"><i class="fa-brands fa-telegram text-sky-400 mr-1"></i> Funciona com o Telegram que você já usa. Sem instalar nada novo. Procure por <a href="https://t.me/telefincashBot" target="_blank" rel="noopener noreferrer" class="text-sky-300 hover:text-sky-200 font-semibold">@telefincashBot</a>.</p>
                 </div>
 
                 <!-- Maquete: conversa + painel -->
@@ -253,6 +258,7 @@
                     <span class="absolute -top-4 left-6 w-9 h-9 rounded-full bg-blue-600 text-white font-extrabold flex items-center justify-center shadow-lg">2</span>
                     <h3 class="mt-3 font-bold text-white">Conecte o Telegram</h3>
                     <p class="mt-2 text-sm text-slate-400 leading-relaxed">Envie <code class="px-1.5 py-0.5 rounded bg-slate-900 text-emerald-300 text-xs">/login</code> para o bot e vincule sua conta.</p>
+                    <a href="https://t.me/telefincashBot" target="_blank" rel="noopener noreferrer" class="mt-3 inline-flex items-center gap-1.5 text-sm font-semibold text-sky-400 hover:text-sky-300"><i class="fa-brands fa-telegram"></i> Abrir @telefincashBot</a>
                 </li>
                 <li class="reveal relative rounded-2xl border border-slate-800 bg-slate-800/50 p-6">
                     <span class="absolute -top-4 left-6 w-9 h-9 rounded-full bg-blue-600 text-white font-extrabold flex items-center justify-center shadow-lg">3</span>
@@ -260,6 +266,37 @@
                     <p class="mt-2 text-sm text-slate-400 leading-relaxed">Mande seus gastos como mensagens e veja tudo organizado no painel, em tempo real.</p>
                 </li>
             </ol>
+        </section>
+
+        <!-- ============ TUTORIAL EM VÍDEO ============ -->
+        <section id="tutorial" class="bg-slate-950/40 border-y border-slate-800">
+            <div class="max-w-5xl mx-auto px-4 py-20">
+                <div class="text-center max-w-2xl mx-auto reveal">
+                    <p class="text-xs font-bold tracking-widest uppercase text-emerald-400">Tutorial em vídeo</p>
+                    <h2 class="mt-3 text-3xl md:text-4xl font-extrabold tracking-tight text-white">Veja o fincash em ação, tela por tela</h2>
+                    <p class="mt-4 text-slate-400">Em pouco mais de 6 minutos você aprende a vincular o Telegram, registrar gastos conversando e usar cada parte do painel.</p>
+                </div>
+
+                <div class="mt-10 reveal">
+                    <div class="relative rounded-2xl border border-slate-700 bg-slate-900 shadow-2xl shadow-blue-900/20 overflow-hidden">
+                        <div class="aspect-video">
+                            <iframe class="w-full h-full"
+                                    src="https://www.youtube-nocookie.com/embed/SKGL4djabtw?rel=0"
+                                    title="Como usar o fincash: tutorial completo, tela por tela"
+                                    loading="lazy"
+                                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                                    referrerpolicy="strict-origin-when-cross-origin"
+                                    allowfullscreen></iframe>
+                        </div>
+                    </div>
+                    <div class="mt-5 flex flex-col sm:flex-row sm:flex-wrap gap-3 justify-center">
+                        <a href="https://youtu.be/SKGL4djabtw" target="_blank" rel="noopener noreferrer" class="inline-flex items-center justify-center gap-2 whitespace-nowrap px-5 py-2.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white text-sm font-semibold rounded-xl transition">
+                            <i class="fa-brands fa-youtube text-red-500 text-lg"></i> Assistir no YouTube
+                        </a>
+                    </div>
+                    <p class="mt-4 text-center text-xs text-slate-500">Os valores mostrados no vídeo são dados de exemplo.</p>
+                </div>
+            </div>
         </section>
 
         <!-- ============ EQUIPE / TECNOLOGIA ============ -->
@@ -327,12 +364,15 @@
             <div class="max-w-3xl mx-auto px-4 py-24 text-center reveal">
                 <h2 class="text-3xl md:text-5xl font-extrabold tracking-tight text-white">Pronto para organizar suas finanças?</h2>
                 <p class="mt-5 text-lg text-slate-300">Crie sua conta, conecte o Telegram e registre seu primeiro gasto hoje.</p>
-                <div class="mt-8 flex flex-col sm:flex-row gap-3 justify-center">
-                    <a href="/login#cadastro" class="inline-flex items-center justify-center gap-2 px-7 py-3.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl shadow-lg shadow-emerald-600/30 transition">
+                <div class="mt-8 flex flex-col sm:flex-row sm:flex-wrap gap-3 justify-center">
+                    <a href="/login#cadastro" class="inline-flex items-center justify-center gap-2 whitespace-nowrap px-7 py-3.5 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-xl shadow-lg shadow-emerald-600/30 transition">
                         <i class="fa-solid fa-user-plus"></i> Criar minha conta
                     </a>
-                    <a href="/login" class="inline-flex items-center justify-center gap-2 px-7 py-3.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white font-semibold rounded-xl transition">
+                    <a href="/login" class="inline-flex items-center justify-center gap-2 whitespace-nowrap px-7 py-3.5 bg-slate-800 hover:bg-slate-700 border border-slate-700 text-white font-semibold rounded-xl transition">
                         <i class="fa-solid fa-right-to-bracket"></i> Entrar
+                    </a>
+                    <a href="https://t.me/telefincashBot" target="_blank" rel="noopener noreferrer" class="inline-flex items-center justify-center gap-2 whitespace-nowrap px-7 py-3.5 bg-sky-600 hover:bg-sky-500 text-white font-semibold rounded-xl shadow-lg shadow-sky-600/30 transition">
+                        <i class="fa-brands fa-telegram"></i> Abrir no Telegram
                     </a>
                 </div>
             </div>
@@ -350,6 +390,7 @@
             <div class="flex items-center gap-5">
                 <a href="#historia" class="hover:text-white transition">Nossa história</a>
                 <a href="/login" class="hover:text-white transition">Entrar</a>
+                <a href="https://t.me/telefincashBot" target="_blank" rel="noopener noreferrer" class="hover:text-white transition" aria-label="Telegram"><i class="fa-brands fa-telegram text-lg"></i></a>
                 <a href="https://github.com/JU-ulia/bot_ia" target="_blank" rel="noopener noreferrer" class="hover:text-white transition" aria-label="GitHub"><i class="fa-brands fa-github text-lg"></i></a>
             </div>
         </div>

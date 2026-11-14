@@ -1468,7 +1468,7 @@ def montar_texto_previsao(p) -> str:
 
 async def responder_previsao(update: Update, user_id: str):
     if not usuario_esta_vinculado(user_id):
-        await update.message.reply_text("⚠️ Vincule sua conta primeiro com `/login <email_ou_telefone> <senha>`.", parse_mode="Markdown")
+        await update.message.reply_text("⚠️ Vincule sua conta primeiro com `/login email_ou_telefone senha`.", parse_mode="Markdown")
         return
     try:
         p = calcular_previsao(str(user_id).strip())
@@ -2607,7 +2607,7 @@ async def processar_mensagem(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 if not user:
                     await update.message.reply_text(
                         "Não encontrei uma conta com esse telefone. Se o número cadastrado for diferente do "
-                        "do seu Telegram, use: /login <email_ou_telefone> <senha>")
+                        "do seu Telegram, use: /login email_ou_telefone senha")
                     return
                 vincular_telegram(cursor, user[0], user_id)
             conexao.commit()
@@ -2645,7 +2645,7 @@ async def processar_mensagem(update: Update, context: ContextTypes.DEFAULT_TYPE)
             "⚠️ **Acesso Não Ativado!**\n\n"
             "Seu Telegram ainda não está vinculado ao **Fincash**.\n\n"
             "• Clique no botão abaixo para confirmar seu número de telefone registrado;\n"
-            "• Ou vincule manualmente usando: `/login <email_ou_telefone> <senha>`",
+            "• Ou vincule manualmente usando: `/login email_ou_telefone senha`",
             reply_markup=keyboard,
             parse_mode="Markdown"
         )
@@ -3286,7 +3286,7 @@ def salvar_config_alertas(telegram_id, ativo=None, limiar=None):
 async def comando_alertas(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     if not usuario_esta_vinculado(user_id):
-        await update.message.reply_text("⚠️ Vincule sua conta primeiro com `/login <email_ou_telefone> <senha>`.", parse_mode="Markdown")
+        await update.message.reply_text("⚠️ Vincule sua conta primeiro com `/login email_ou_telefone senha`.", parse_mode="Markdown")
         return
 
     arg = context.args[0].strip().lower().rstrip('%') if context.args else ""
@@ -3506,7 +3506,7 @@ async def responder_lista_categorias(update: Update, user_id: str):
 async def comando_categorias(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     if not usuario_esta_vinculado(user_id):
-        await update.message.reply_text("⚠️ Vincule sua conta primeiro com `/login <email_ou_telefone> <senha>`.", parse_mode="Markdown")
+        await update.message.reply_text("⚠️ Vincule sua conta primeiro com `/login email_ou_telefone senha`.", parse_mode="Markdown")
         return
     await responder_lista_categorias(update, user_id)
 
@@ -3514,7 +3514,7 @@ async def comando_categorias(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def comando_nova_categoria(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     if not usuario_esta_vinculado(user_id):
-        await update.message.reply_text("⚠️ Vincule sua conta primeiro com `/login <email_ou_telefone> <senha>`.", parse_mode="Markdown")
+        await update.message.reply_text("⚠️ Vincule sua conta primeiro com `/login email_ou_telefone senha`.", parse_mode="Markdown")
         return
     if not context.args:
         await update.message.reply_text("⚠️ **Uso correto:** `/novacategoria Pet`", parse_mode="Markdown")
@@ -3525,7 +3525,7 @@ async def comando_nova_categoria(update: Update, context: ContextTypes.DEFAULT_T
 async def comando_excluir_categoria(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     if not usuario_esta_vinculado(user_id):
-        await update.message.reply_text("⚠️ Vincule sua conta primeiro com `/login <email_ou_telefone> <senha>`.", parse_mode="Markdown")
+        await update.message.reply_text("⚠️ Vincule sua conta primeiro com `/login email_ou_telefone senha`.", parse_mode="Markdown")
         return
     if not context.args:
         await update.message.reply_text("⚠️ **Uso correto:** `/excluircategoria Pet`", parse_mode="Markdown")
@@ -3553,7 +3553,7 @@ async def responder_movimento_poupanca(update: Update, user_id: str, tipo: str, 
         await update.message.reply_text(f"❌ Informe um valor válido. Exemplo: `{exemplo}`", parse_mode="Markdown")
         return
     if not usuario_esta_vinculado(user_id):
-        await update.message.reply_text("⚠️ Seu Telegram ainda não está vinculado ao **Fincash**. Use `/login <email_ou_telefone> <senha>`.", parse_mode="Markdown")
+        await update.message.reply_text("⚠️ Seu Telegram ainda não está vinculado ao **Fincash**. Use `/login email_ou_telefone senha`.", parse_mode="Markdown")
         return
 
     try:
@@ -3600,7 +3600,7 @@ async def responder_movimento_investimento(update: Update, user_id: str, tipo: s
         await update.message.reply_text(f"❌ Informe um valor válido. Exemplo: `{exemplo}`", parse_mode="Markdown")
         return
     if not usuario_esta_vinculado(user_id):
-        await update.message.reply_text("⚠️ Seu Telegram ainda não está vinculado ao **Fincash**. Use `/login <email_ou_telefone> <senha>`.", parse_mode="Markdown")
+        await update.message.reply_text("⚠️ Seu Telegram ainda não está vinculado ao **Fincash**. Use `/login email_ou_telefone senha`.", parse_mode="Markdown")
         return
 
     conexao = obter_conexao()
@@ -3681,7 +3681,7 @@ PADRAO_SAUDACAO = re.compile(
     r'(?:\s+(?:tudo bem|td bem|fincash|bot|bom dia|boa tarde|boa noite))*$')
 PEDIDOS_DE_MENU = {"menu", "ajuda", "help", "opcoes", "mais opcoes", "ver menu", "abrir menu"}
 
-AVISO_VINCULAR_HTML = "⚠️ Vincule sua conta primeiro com /login &lt;email_ou_telefone&gt; &lt;senha&gt;."
+AVISO_VINCULAR_HTML = "⚠️ Vincule sua conta primeiro com /login email_ou_telefone senha."
 
 TEXTO_MENU_PRINCIPAL = ("📋 <b>Menu do Fincash</b>\n\n"
                         "O que você quer ver? Toque em uma opção.\n"
@@ -3973,7 +3973,7 @@ async def responder_definir_meta(update: Update, user_id: str, valor_txt: str):
         await update.message.reply_text("❌ Informe um valor válido. Exemplo: /meta 5000")
         return
     if not usuario_esta_vinculado(user_id):
-        await update.message.reply_text("⚠️ Vincule sua conta primeiro com /login <email_ou_telefone> <senha>.")
+        await update.message.reply_text("⚠️ Vincule sua conta primeiro com /login email_ou_telefone senha.")
         return
     try:
         _, meta_antiga = await asyncio.to_thread(obter_meta_poupanca, user_id)
@@ -4004,7 +4004,7 @@ async def pedir_confirmacao_remover_meta(update: Update, context: ContextTypes.D
 async def comando_meta(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     if not usuario_esta_vinculado(user_id):
-        await update.message.reply_text("⚠️ Vincule sua conta primeiro com /login <email_ou_telefone> <senha>.")
+        await update.message.reply_text("⚠️ Vincule sua conta primeiro com /login email_ou_telefone senha.")
         return
     if not context.args:
         await responder_ver_meta(update, user_id)
@@ -4192,7 +4192,7 @@ async def _job_alertas_poupanca(context: ContextTypes.DEFAULT_TYPE):
 async def comando_alerta_poupanca(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = str(update.effective_user.id)
     if not usuario_esta_vinculado(user_id):
-        await update.message.reply_text("⚠️ Vincule sua conta primeiro com /login <email_ou_telefone> <senha>.")
+        await update.message.reply_text("⚠️ Vincule sua conta primeiro com /login email_ou_telefone senha.")
         return
     arg = context.args[0].strip().lower() if context.args else ""
     if arg in ("on", "ligar", "ativar"):

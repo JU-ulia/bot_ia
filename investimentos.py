@@ -1007,7 +1007,7 @@ async def tratar_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     tid = str(q.from_user.id)
     if not _deps["vinculado"](tid):
-        await q.message.reply_text("⚠️ Vincule sua conta primeiro com /login <email_ou_telefone> <senha>.")
+        await q.message.reply_text("⚠️ Vincule sua conta primeiro com /login email_ou_telefone senha.")
         return
     acao = (q.data or "")[4:]
 
@@ -1021,7 +1021,7 @@ async def tratar_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def comando_investir(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tid = str(update.effective_user.id)
     if not _deps["vinculado"](tid):
-        await update.message.reply_text("⚠️ Vincule sua conta primeiro com /login <email_ou_telefone> <senha>.")
+        await update.message.reply_text("⚠️ Vincule sua conta primeiro com /login email_ou_telefone senha.")
         return
 
     async def responder(texto, teclado=None):
