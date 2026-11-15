@@ -8,6 +8,14 @@ O projeto foi desenvolvido em Python, utilizando Flask, PostgreSQL, Telegram Bot
 
 ---
 
+## 🌐 Acesse o Projeto
+
+🚀 **Aplicação online:** [Acessar Fincash](COLE_AQUI_O_LINK_DA_APLICACAO)
+
+Conheça a plataforma Fincash e explore suas funcionalidades de gestão financeira, inteligência artificial e acompanhamento de investimentos.
+
+---
+
 ## 🎯 Objetivo do Projeto
 
 O objetivo do Fincash é tornar a gestão financeira mais acessível, prática e inteligente, ajudando os usuários a desenvolverem hábitos financeiros saudáveis.
