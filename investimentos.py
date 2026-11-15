@@ -1,25 +1,12 @@
-"""
-Fincash · Investimentos
------------------------
-  • notícias em tempo real por perfil de investidor (Google Notícias RSS, sem chave de API)
-  • indicadores (dólar, euro, bitcoin, ethereum, Selic, IPCA) — AwesomeAPI e Banco Central, sem chave
-  • análise da IA (Groq) a partir das manchetes: resumo, riscos, oportunidades, empresas em crescimento, dicas
-  • rotas web  (/investimentos e /api/investimentos/...)
-  • menu e conversa no Telegram ("dicas de investimentos", /investir)
-  • quiz de perfil de investidor (Telegram e site) — o resultado é aplicado automaticamente, mas dá para trocar à mão
-  • alertas opcionais no Telegram: notícias em tempo real + sinal "considerar investir / manter / reduzir" conforme o perfil
-
-Só usa a biblioteca padrão + o que o fincash.py já usa (flask, python-telegram-bot, groq).
-Conteúdo informativo: nada aqui é recomendação de investimento.
-"""
-
 import asyncio
 import hashlib
 import html
 import json
+import os
 import re
 import threading
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -143,8 +130,11 @@ def _cache_set(chave, valor):
         _cache[chave] = (time.time(), valor)
 
 
-def _http_get(url, timeout=8) -> bytes:
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; Fincash/1.0)", "Accept": "*/*"})
+def _http_get(url, timeout=8, headers=None) -> bytes:
+    cab = {"User-Agent": "Mozilla/5.0 (compatible; Fincash/1.0)", "Accept": "*/*"}
+    if headers:
+        cab.update(headers)
+    req = urllib.request.Request(url, headers=cab)
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read()
 
@@ -236,17 +226,61 @@ def buscar_indicadores():
     if cached is not None:
         return cached
     itens = []
+    moedas = {}   # "Dólar" -> (valor_float, variação_em_% ou None)
+
+    def _add(nome, valor, variacao):
+        valor = float(valor)      # a AwesomeAPI devolve os preços como texto ("5.40")
+        if nome not in moedas and valor > 0:
+            moedas[nome] = (valor, None if variacao is None else float(variacao))
+
+    # 1) AwesomeAPI (se tiver chave grátis em AWESOMEAPI_KEY, o limite de acessos é bem maior)
     try:
-        js = json.loads(_http_get("https://economia.awesomeapi.com.br/json/last/USD-BRL,EUR-BRL,BTC-BRL,ETH-BRL"))
-        for chave, nome, emoji in (("USDBRL", "Dólar", "💵"), ("EURBRL", "Euro", "💶"),
-                                   ("BTCBRL", "Bitcoin", "₿"), ("ETHBRL", "Ethereum", "◆")):
-            d = js.get(chave)
+        chave_api = os.getenv("AWESOMEAPI_KEY", "").strip()
+        js = json.loads(_http_get("https://economia.awesomeapi.com.br/json/last/USD-BRL,EUR-BRL,BTC-BRL,ETH-BRL",
+                                  headers={"x-api-key": chave_api} if chave_api else None))
+        for chave, nome in (("USDBRL", "Dólar"), ("EURBRL", "Euro"), ("BTCBRL", "Bitcoin"), ("ETHBRL", "Ethereum")):
+            d = js.get(chave) if isinstance(js, dict) else None
             if d:
-                bid = float(d["bid"])
-                itens.append({"nome": nome, "emoji": emoji, "valor": _brl(bid, 0 if bid >= 10000 else 2),
-                              "variacao": float(d.get("pctChange", 0))})
+                _add(nome, d["bid"], d.get("pctChange", 0))
     except Exception as e:
-        print(f"⚠️ Indicadores (moedas): {e}")
+        print(f"⚠️ Indicadores (AwesomeAPI): {e}")
+
+    # 2) Plano B para dólar e euro (câmbio do dia, sem chave)
+    if "Dólar" not in moedas or "Euro" not in moedas:
+        try:
+            js = json.loads(_http_get("https://open.er-api.com/v6/latest/USD"))
+            brl, eur = js["rates"]["BRL"], js["rates"]["EUR"]
+            _add("Dólar", brl, None)
+            _add("Euro", brl / eur, None)
+        except Exception as e:
+            print(f"⚠️ Indicadores (câmbio, plano B): {e}")
+
+    # 3) Plano B para Bitcoin e Ethereum (CoinGecko, sem chave)
+    if "Bitcoin" not in moedas or "Ethereum" not in moedas:
+        try:
+            js = json.loads(_http_get("https://api.coingecko.com/api/v3/simple/price"
+                                      "?ids=bitcoin,ethereum&vs_currencies=brl&include_24hr_change=true"))
+            for cid, nome in (("bitcoin", "Bitcoin"), ("ethereum", "Ethereum")):
+                d = js.get(cid)
+                if d:
+                    _add(nome, d["brl"], d.get("brl_24h_change"))
+        except Exception as e:
+            print(f"⚠️ Indicadores (cripto, plano B): {e}")
+
+    # 4) Último recurso para cripto: preço à vista da Coinbase (sem variação)
+    for par, nome in (("BTC-BRL", "Bitcoin"), ("ETH-BRL", "Ethereum")):
+        if nome not in moedas:
+            try:
+                js = json.loads(_http_get(f"https://api.coinbase.com/v2/prices/{par}/spot"))
+                _add(nome, float(js["data"]["amount"]), None)
+            except Exception as e:
+                print(f"⚠️ Indicadores ({nome}, Coinbase): {e}")
+
+    for nome, emoji in (("Dólar", "💵"), ("Euro", "💶"), ("Bitcoin", "₿"), ("Ethereum", "◆")):
+        if nome in moedas:
+            valor, var = moedas[nome]
+            itens.append({"nome": nome, "emoji": emoji, "valor": _brl(valor, 0 if valor >= 10000 else 2),
+                          "variacao": None if var is None else round(var, 2)})
     for serie, nome, emoji, sufixo in ((432, "Selic", "🏦", " a.a."), (433, "IPCA (mês)", "🛒", "")):
         try:
             js = json.loads(_http_get(
@@ -587,6 +621,13 @@ def perfil_por_telegram(tid):
 # SITE (Flask)
 # ==========================================
 def registrar_web(app):
+    @app.errorhandler(500)
+    def _erro_500_investimentos(e):
+        # nas rotas da API, devolve JSON (o site mostra a mensagem) em vez da página HTML de erro
+        if request.path.startswith('/api/investimentos'):
+            return jsonify({"erro": "Erro interno ao processar o pedido. Veja o log do servidor."}), 500
+        return e
+
     def uid_atual():
         uid = session.get('user_id')
         if uid:

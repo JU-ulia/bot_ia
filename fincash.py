@@ -4402,6 +4402,11 @@ investimentos.configurar(
 )
 investimentos.registrar_web(app_web)   # rotas web podem ser registradas já aqui
 
+try:
+    investimentos.preparar_banco()
+except Exception as _e:
+    print(f"❌ Não consegui preparar o banco de investimentos: {_e}")
+
 #
 # INICIALIZAÇÃO DA APLICAÇÃO (BOT + WEB) - NOVO
 #
@@ -4533,7 +4538,6 @@ def receber_webhook_telegram():
 # ==========================================
 
 if __name__ == "__main__":
-    investimentos.preparar_banco()   
 
     thread_web = threading.Thread(target=rodar_flask)
     thread_web.daemon = True
