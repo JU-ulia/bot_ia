@@ -10,7 +10,7 @@ O projeto foi desenvolvido em Python, utilizando Flask, PostgreSQL, Telegram Bot
 
 ## 🌐 Acesse o Projeto
 
-🚀 **Aplicação online:** [Acessar Fincash](COLE_AQUI_O_LINK_DA_APLICACAO)
+🚀 **Aplicação online:** [Acessar Fincash](https://bot-ia-lqvl.onrender.com/sobre)
 
 Conheça a plataforma Fincash e explore suas funcionalidades de gestão financeira, inteligência artificial e acompanhamento de investimentos.
 
