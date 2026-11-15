@@ -71,7 +71,7 @@
             </div>
             <div class="flex items-center gap-3">
                 <span class="font-medium text-slate-700 hidden sm:inline-block" id="user-name">Carregando...</span>
-                <img src="https://placehold.co/100x100/2563eb/ffffff?text=U" alt="Perfil do Usuário" class="w-10 h-10 rounded-full border-2 border-blue-500 shadow-sm object-cover">
+                <span id="user-avatar" aria-label="Perfil do Usuário" class="w-10 h-10 shrink-0 rounded-full border-2 border-blue-500 shadow-sm bg-blue-600 text-white font-bold text-base flex items-center justify-center select-none"><i class="fa-solid fa-user text-sm"></i></span>
             </div>
         </header>
 
@@ -283,6 +283,23 @@
         }
 
         document.addEventListener('DOMContentLoaded', carregarPerfil);
+    </script>
+    <script>
+        // Inicial do nome no círculo do perfil (atualiza sozinha quando o nome é carregado ou alterado)
+        (function () {
+            const nome = document.getElementById('user-name');
+            const avatar = document.getElementById('user-avatar');
+            if (!nome || !avatar) return;
+            function atualizarInicial() {
+                const t = (nome.textContent || '').trim();
+                if (!t || /^carregando/i.test(t)) return;
+                const letra = Array.from(t)[0].toLocaleUpperCase('pt-BR');
+                avatar.textContent = letra;
+                avatar.title = t;
+            }
+            new MutationObserver(atualizarInicial).observe(nome, { childList: true, characterData: true, subtree: true });
+            atualizarInicial();
+        })();
     </script>
 </body>
 </html>

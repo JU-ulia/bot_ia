@@ -90,7 +90,7 @@ async function carregarDadosDashboard(usuarioId, mesFiltro = null) {
         if (dados.usuario) setUserName(dados.usuario);
 
         // Verifica se existem dados registrados no mês selecionado
-        const possuiDados = dados.totais && (dados.totais.renda > 0 || dados.totais.despesa > 0 || dados.totais.poupanca > 0);
+        const possuiDados = dados.totais && (dados.totais.renda > 0 || dados.totais.despesa > 0 || dados.totais.poupanca > 0 || (dados.totais.investimento_liquido || 0) !== 0);
 
         // 2. Atualiza Poupança / Total Guardado
         const elPoupanca = document.getElementById('total-poupanca');
@@ -119,15 +119,17 @@ async function carregarDadosDashboard(usuarioId, mesFiltro = null) {
                 budgetChartInstance.data.datasets[0].data = [1];
                 budgetChartInstance.data.datasets[0].backgroundColor = ['#cbd5e1'];
             } else {
-                budgetChartInstance.data.labels = ['Receita Mensal', 'Despesas Totais', 'Poupança', 'Saldo Atual'];
+                budgetChartInstance.data.labels = ['Receita Mensal', 'Despesas Totais', 'Poupança', 'Investimentos', 'Saldo Atual'];
                 budgetChartInstance.data.datasets[0].data = [
                     dados.totais.renda || 0,
                     dados.totais.despesa || 0,
                     // poupança líquida do período (depósitos - saques); fatia não pode ser negativa
                     Math.max(dados.totais.poupanca_liquida || 0, 0),
+                    // investimento líquido do período (aportes - resgates); fatia não pode ser negativa
+                    Math.max(dados.totais.investimento_liquido || 0, 0),
                     dados.totais.saldo > 0 ? dados.totais.saldo : 0
                 ];
-                budgetChartInstance.data.datasets[0].backgroundColor = ['#3b82f6', '#a855f7', '#10b981', '#f97316'];
+                budgetChartInstance.data.datasets[0].backgroundColor = ['#3b82f6', '#a855f7', '#10b981', '#06b6d4', '#f97316'];
             }
             budgetChartInstance.update();
         }
@@ -329,8 +331,8 @@ function initBudgetChart() {
     budgetChartInstance = new Chart(canvas.getContext('2d'), {
         type: 'doughnut',
         data: {
-            labels: ['Receita Mensal', 'Despesas Totais', 'Poupança', 'Saldo Atual'],
-            datasets: [{ data: [0, 0, 0, 0], backgroundColor: ['#3b82f6', '#a855f7', '#10b981', '#f97316'] }]
+            labels: ['Receita Mensal', 'Despesas Totais', 'Poupança', 'Investimentos', 'Saldo Atual'],
+            datasets: [{ data: [0, 0, 0, 0, 0], backgroundColor: ['#3b82f6', '#a855f7', '#10b981', '#06b6d4', '#f97316'] }]
         },
         options: { responsive: true, maintainAspectRatio: false }
     });

@@ -117,8 +117,7 @@
                 <!-- Perfil do Usuário (clique para abrir o perfil) -->
                 <a href="/perfil" class="flex items-center gap-3" title="Meu perfil">
                     <span class="font-medium text-slate-700 hidden sm:inline-block" id="user-name">Carregando...</span>
-                    <img src="https://placehold.co/100x100/2563eb/ffffff?text=U" alt="Perfil do Usuário"
-                        class="w-10 h-10 rounded-full border-2 border-blue-500 shadow-sm object-cover">
+                    <span id="user-avatar" aria-label="Perfil do Usuário" class="w-10 h-10 shrink-0 rounded-full border-2 border-blue-500 shadow-sm bg-blue-600 text-white font-bold text-base flex items-center justify-center select-none"><i class="fa-solid fa-user text-sm"></i></span>
                 </a>
             </div>
         </header>
@@ -334,9 +333,9 @@
                             </div>
 
                             <!-- Avisos -->
-                            <div class="p-3 bg-amber-50 border border-amber-100 rounded-xl self-start">
-                                <p class="text-xs font-bold text-amber-800 mb-2">
-                                    <i class="fa-solid fa-triangle-exclamation mr-1"></i> Atenção
+                            <div id="previsao-avisos-box" class="p-3 bg-blue-50 border border-blue-100 rounded-xl self-start">
+                                <p id="previsao-avisos-titulo" class="text-xs font-bold text-blue-800 mb-2">
+                                    <i class="fa-solid fa-circle-info mr-1"></i> Como começar
                                 </p>
                                 <ul class="space-y-2" id="previsao-avisos"></ul>
                             </div>
@@ -360,12 +359,22 @@
                     if (txt !== undefined) e.textContent = txt;
                     return e;
                 };
-                const mostrarAvisos = lista => {
+                // tipo 'info': orientação neutra (azul), ex.: usuário novo sem lançamentos.
+                // tipo 'atencao': alerta de verdade (âmbar), ex.: erro ou aviso do cálculo.
+                const mostrarAvisos = (lista, tipo = 'atencao') => {
+                    const info = tipo === 'info';
+                    $('previsao-avisos-box').className = 'p-3 border rounded-xl self-start ' +
+                        (info ? 'bg-blue-50 border-blue-100' : 'bg-amber-50 border-amber-100');
+                    const titulo = $('previsao-avisos-titulo');
+                    titulo.className = 'text-xs font-bold mb-2 ' + (info ? 'text-blue-800' : 'text-amber-800');
+                    titulo.replaceChildren(
+                        el('i', 'fa-solid mr-1 ' + (info ? 'fa-circle-info' : 'fa-triangle-exclamation')),
+                        document.createTextNode(info ? ' Como começar' : ' Atenção'));
                     const ul = $('previsao-avisos');
                     ul.replaceChildren();
                     lista.forEach(t => {
-                        const li = el('li', 'text-sm text-amber-900 font-medium flex gap-2');
-                        li.appendChild(el('i', 'fa-solid fa-circle-exclamation mt-1 text-amber-500'));
+                        const li = el('li', 'text-sm font-medium flex gap-2 ' + (info ? 'text-blue-900' : 'text-amber-900'));
+                        li.appendChild(el('i', 'fa-solid mt-1 ' + (info ? 'fa-circle-info text-blue-500' : 'fa-circle-exclamation text-amber-500')));
                         li.appendChild(el('span', null, t));
                         ul.appendChild(li);
                     });
@@ -378,12 +387,15 @@
 
                     $('previsao-categorias').replaceChildren();
                     if (d.vinculado === false) {
-                        mostrarAvisos(['Vincule seu Telegram para ver a previsão.']);
+                        $('previsao-categorias').appendChild(el('p', 'text-sm text-slate-500', 'Disponível depois que o Telegram for vinculado.'));
+                        mostrarAvisos(['Vincule seu Telegram para ver a previsão.'], 'info');
                         return;
                     }
                     $('previsao-mes').textContent = d.mes_rotulo;
                     if (!d.disponivel) {
-                        mostrarAvisos(['Registre algumas despesas para liberar a previsão.']);
+                        // Usuário novo (ou sem despesas no período): não é um problema, só falta o primeiro lançamento.
+                        $('previsao-categorias').appendChild(el('p', 'text-sm text-slate-500', 'As categorias aparecem aqui assim que você registrar suas despesas.'));
+                        mostrarAvisos(['Envie sua primeira despesa para o bot no Telegram, por exemplo "gastei 25 no almoço", e a previsão aparece aqui.'], 'info');
                         return;
                     }
 
@@ -525,6 +537,23 @@
         }
     </script>
     <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+    <script>
+        // Inicial do nome no círculo do perfil (atualiza sozinha quando o nome é carregado ou alterado)
+        (function () {
+            const nome = document.getElementById('user-name');
+            const avatar = document.getElementById('user-avatar');
+            if (!nome || !avatar) return;
+            function atualizarInicial() {
+                const t = (nome.textContent || '').trim();
+                if (!t || /^carregando/i.test(t)) return;
+                const letra = Array.from(t)[0].toLocaleUpperCase('pt-BR');
+                avatar.textContent = letra;
+                avatar.title = t;
+            }
+            new MutationObserver(atualizarInicial).observe(nome, { childList: true, characterData: true, subtree: true });
+            atualizarInicial();
+        })();
+    </script>
 </body>
 
 </html>

@@ -89,8 +89,7 @@
                 </div>
                 <a href="/perfil" class="flex items-center gap-3" title="Meu perfil">
                     <span class="font-medium text-slate-700 hidden sm:inline-block" id="user-name"></span>
-                    <img src="https://placehold.co/100x100/2563eb/ffffff?text=U" alt="Perfil do Usuário"
-                        class="w-10 h-10 rounded-full border-2 border-blue-500 shadow-sm object-cover">
+                    <span id="user-avatar" aria-label="Perfil do Usuário" class="w-10 h-10 shrink-0 rounded-full border-2 border-blue-500 shadow-sm bg-blue-600 text-white font-bold text-base flex items-center justify-center select-none"><i class="fa-solid fa-user text-sm"></i></span>
                 </a>
             </div>
         </header>
@@ -151,6 +150,7 @@
                             <button data-tipo="renda" class="px-4 py-1.5 rounded-lg text-slate-500 hover:text-slate-800">Entradas</button>
                             <button data-tipo="despesa" class="px-4 py-1.5 rounded-lg text-slate-500 hover:text-slate-800">Saídas</button>
                             <button data-tipo="poupanca" class="px-4 py-1.5 rounded-lg text-slate-500 hover:text-slate-800">Poupança</button>
+                            <button data-tipo="investimento" class="px-4 py-1.5 rounded-lg text-slate-500 hover:text-slate-800">Investimentos</button>
                         </div>
                         <div class="relative md:w-72">
                             <i class="fa-solid fa-magnifying-glass absolute left-3.5 top-3.5 text-slate-400 text-sm"></i>
@@ -296,6 +296,13 @@
                              icone: 'fa-piggy-bank', rotulo: guardou ? 'Guardado' : 'Retirado',
                              sinal: guardou ? '+' : '-' };
                 }
+                if (t.tipo === 'investimento') {
+                    // Igual à poupança: movimento próprio, sem ID de transação (poup: true esconde o ID)
+                    const aportou = t.sentido === 'entrada';
+                    return { poup: true, cor: 'text-violet-600', bg: 'bg-violet-100 text-violet-600',
+                             icone: 'fa-chart-line', rotulo: aportou ? 'Investido' : 'Resgatado',
+                             sinal: aportou ? '+' : '-' };
+                }
                 const entrada = t.tipo === 'renda';
                 return { poup: false, cor: entrada ? 'text-emerald-600' : 'text-red-500',
                          bg: entrada ? 'bg-emerald-100 text-emerald-600' : 'bg-red-100 text-red-500',
@@ -382,10 +389,13 @@
                 ['ID', 'Data', 'Tipo', 'Categoria', 'Descrição', 'Valor (R$)'],
             ];
             filtradas().forEach(t => {
+                const semId = t.tipo === 'poupanca' || t.tipo === 'investimento';
                 const tipo = t.tipo === 'poupanca'
                     ? (t.sentido === 'deposito' ? 'Poupança - Guardado' : 'Poupança - Retirado')
-                    : (t.tipo === 'renda' ? 'Entrada' : 'Saída');
-                linhas.push([t.tipo === 'poupanca' ? '' : t.id, t.data_fmt, tipo,
+                    : t.tipo === 'investimento'
+                        ? (t.sentido === 'entrada' ? 'Investimento - Aporte' : 'Investimento - Resgate')
+                        : (t.tipo === 'renda' ? 'Entrada' : 'Saída');
+                linhas.push([semId ? '' : t.id, t.data_fmt, tipo,
                              csvSeguro(t.categoria), csvSeguro(t.descricao), numCSV(t.valor)]);
             });
             baixarCSV(linhas, 'fincash_extrato_' + (mes || 'todo-periodo') + '.csv');
@@ -416,6 +426,23 @@
             a.remove();
             setTimeout(() => URL.revokeObjectURL(a.href), 1000);
         }
+    </script>
+    <script>
+        // Inicial do nome no círculo do perfil (atualiza sozinha quando o nome é carregado ou alterado)
+        (function () {
+            const nome = document.getElementById('user-name');
+            const avatar = document.getElementById('user-avatar');
+            if (!nome || !avatar) return;
+            function atualizarInicial() {
+                const t = (nome.textContent || '').trim();
+                if (!t || /^carregando/i.test(t)) return;
+                const letra = Array.from(t)[0].toLocaleUpperCase('pt-BR');
+                avatar.textContent = letra;
+                avatar.title = t;
+            }
+            new MutationObserver(atualizarInicial).observe(nome, { childList: true, characterData: true, subtree: true });
+            atualizarInicial();
+        })();
     </script>
 </body>
 </html>

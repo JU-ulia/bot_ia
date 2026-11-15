@@ -85,6 +85,10 @@
                 </div>
                 <button onclick="exportarCSV()" class="px-3.5 py-2.5 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 text-sm font-semibold rounded-xl"><i class="fa-solid fa-file-csv mr-1.5 text-emerald-600"></i>CSV / Excel</button>
                 <button onclick="exportarPDF()" class="px-3.5 py-2.5 bg-white hover:bg-slate-50 border border-slate-200 text-slate-700 text-sm font-semibold rounded-xl"><i class="fa-solid fa-file-pdf mr-1.5 text-red-500"></i>PDF</button>
+                <a href="/perfil" class="flex items-center gap-3 ml-2" title="Meu perfil">
+                <span class="font-medium text-slate-700 hidden sm:inline-block" id="user-name"></span>
+                <span id="user-avatar" aria-label="Perfil do Usuário" class="w-10 h-10 shrink-0 rounded-full border-2 border-blue-500 shadow-sm bg-blue-600 text-white font-bold text-base flex items-center justify-center select-none"><i class="fa-solid fa-user text-sm"></i></span>
+            </a>
             </div>
         </header>
 
@@ -305,6 +309,25 @@
         }
 
         carregar();
+    </script>
+    <script>
+        // Nome do usuário e inicial no círculo do perfil
+        (function () {
+            const nome = document.getElementById('user-name');
+            const avatar = document.getElementById('user-avatar');
+            if (!nome || !avatar) return;
+            function atualizarInicial() {
+                const t = (nome.textContent || '').trim();
+                if (!t || /^carregando/i.test(t)) return;
+                avatar.textContent = Array.from(t)[0].toLocaleUpperCase('pt-BR');
+                avatar.title = t;
+            }
+            new MutationObserver(atualizarInicial).observe(nome, { childList: true, characterData: true, subtree: true });
+            fetch('/api/usuario-atual')
+                .then(r => r.ok ? r.json() : null)
+                .then(d => { if (d && d.nome) nome.textContent = d.nome; })
+                .catch(() => { /* o nome é só um detalhe visual */ });
+        })();
     </script>
 </body>
 </html>
